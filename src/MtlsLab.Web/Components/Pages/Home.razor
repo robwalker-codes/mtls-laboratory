@@ -1,0 +1,216 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject ContentCatalogue Content
+@inject IJSRuntime JS
+@inject Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage.ProtectedSessionStorage Storage
+
+<PageTitle>mTLS Laboratory — explore the handshake</PageTitle>
+<a class="skip-link" href="#controls">Skip to experiment controls</a>
+<header class="topbar"><a class="wordmark" href="/"><span class="brand-icon">⌁</span> mTLS <span>Laboratory</span></a><nav aria-label="Main navigation"><a href="#experiment">Experiment</a><a href="#learning-panel">Field notes</a><a href="#reference-library">Reference library</a></nav><span class="engine-tag">C# · BOUNCY CASTLE 2.7.0</span></header>
+<main class="shell">
+    <section class="intro" id="experiment"><div><div class="eyebrow">An interactive protocol laboratory</div><h1>See what makes a<br /><em>connection trustworthy.</em></h1><p>Two real TLS peers. One record at a time. Explore the bytes, the proofs and the decisions behind mutual authentication.</p></div><div class="intro-note"><span class="status-dot live"></span><strong>Genuine TLS 1.3</strong><p>Managed cryptography.<br />In-memory transport.<br />No simulated handshake.</p><a href="#learning-panel" @onclick='() => SelectTopic("overview")'>How this laboratory works ↓</a></div></section>
+
+    <section class="experiment-config" aria-label="Experiment configuration">
+        <label class="scenario-label">Experiment<select @bind="scenario" disabled="@running">@foreach (var s in Scenario.All) { <option value="@s.Id">@s.Title</option> }</select></label>
+        <label>Learning depth<select value="@progress.Depth" @onchange="ChangeDepth"><option value="Beginner">Beginner</option><option value="Engineer">Engineer</option><option value="Internals">Protocol Internals</option></select></label>
+        <label>View<select @bind="mode"><option>Protocol Execution</option><option>Guided Learning</option></select></label>
+        <label>Client identity<select @bind="useClientB" disabled="@(running || scenario != "mutual")"><option value="false">Client A</option><option value="true">Client B</option></select></label>
+        @if (scenario == "trust-policy") { <label class="check-label"><input type="checkbox" @bind="trustIndependent" disabled="@running" /> Trust the independent root on the server</label> }
+    </section>
+    <div class="scenario-description"><strong>@Scenario.Find(scenario).Title.</strong> @Scenario.Find(scenario).Configuration <span>Expected: @Scenario.Find(scenario).Expected</span>@if (session is not null && session.Options != CurrentOptions) { <b class="pending-config">Configuration changed. Reset to apply.</b> }</div>
+
+    <section class="control-bar" id="controls" aria-label="TLS execution controls">
+        <button class="primary" disabled="@(session is not null || running)" @onclick="Start">Start Handshake <span>↗</span></button>
+        <button disabled="@(session is null || session.PendingCount == 0 || running)" @onclick="Next">Next <span>→</span></button>
+        <button disabled="@(session is null || session.PendingCount == 0 || running || session.State == LabState.Failed)" @onclick="Run">Run <span>▷</span></button>
+        <button disabled="@(!running)" @onclick="Pause">Pause <span>Ⅱ</span></button>
+        <button disabled="@(session is null)" @onclick="Start">Reset <span>↺</span></button>
+        <label class="speed">Delivery interval <select @bind="interval" disabled="@running"><option value="100">0.1 s</option><option value="500">0.5 s</option><option value="1000">1 s</option><option value="2000">2 s</option></select></label>
+        <span class="state-badge @(session?.State == LabState.Failed ? "failure" : "")">@(running ? "Running" : session?.State.ToString() ?? "Ready to start")</span>
+    </section>
+    <div class="execution-status" role="status"><span class="mono">NEXT</span> @(session?.NextAction ?? "Create an independent client and server session") <span class="muted">One record delivery may trigger several internal transitions.</span></div>
+    @if (notice is not null) { <div class="notice" role="alert">@notice</div> }
+    @if (session?.State == LabState.Failed)
+    {
+        <div class="failure-panel" role="alert"><div class="eyebrow">Experiment rejected / actual TLS outcome</div><h2>Authentication did not succeed.</h2><p>@session.Failure</p><p><strong>Configured:</strong> @session.Options.Scenario.Configuration</p><p><strong>To correct the experiment:</strong> @session.Options.Scenario.Remedy</p><button class="text-button" @onclick='() => SelectTopic("alerts")'>Understand this failure →</button><p class="small">Run stops at failure. Next can deliver remaining queued records, including the alert. Certificate and callback details remain inspectable below.</p></div>
+    }
+
+    <section class="lab-grid" aria-label="TLS peers and sequence">
+        <PeerPanel Session="session" Side="PeerSide.Client" Active="@(activePeer == PeerSide.Client)" OnTopic="SelectTopic" />
+        <section class="sequence-panel"><div class="sequence-title"><div><div class="eyebrow">@mode</div><h2>The conversation</h2></div><span class="mono muted">@(session?.PendingCount ?? 0) queued</span></div>
+            <div class="sequence-endpoints"><span>CLIENT</span><span>IN-MEMORY TRANSPORT</span><span>SERVER</span></div>
+            @if (session is null)
+            { <div class="sequence-empty"><div class="empty-lines"><span>○</span><span>→</span><span>○</span></div><h3>A secure channel starts with a question.</h3><p>Start a handshake to capture the client's actual proposal. Nothing reaches the server until you choose Next.</p><span class="badge">TLS 1.3 · ECDHE · AES-GCM</span></div> }
+            else
+            {
+                <div class="record-scroll">
+                    @foreach (var record in session.Records)
+                    {
+                        <article id="record-@record.Id" class="record-row @(record.Sender == PeerSide.Client ? "to-server" : "to-client") @(record.Encrypted ? "encrypted" : "plaintext") @(record.Status.ToString().ToLowerInvariant()) @(selectedRecord?.Id == record.Id ? "record-selected" : "")">
+                            <button class="record-button" @onclick="() => SelectRecord(record)"><span class="record-meta"><span>#@record.Id.ToString("D2") · @record.Bytes.Length B</span><span>@(record.Encrypted ? "● Encrypted" : "○ Plaintext")</span></span><span class="record-label">@record.Label</span><span class="record-arrow">@(record.Sender == PeerSide.Client ? "──────────────────→" : "←──────────────────")</span><span class="record-meta"><span>@record.Sender → @record.Receiver</span><span>@record.Status @(record.DeliveryOrder is { } order ? $"· delivery {order}" : "")</span></span></button>
+                            <div class="record-messages">
+                                @foreach (var e in session.Events.Where(x => x.RecordId == record.Id && x.Kind is "handshake" or "plaintext-handshake"))
+                                { <button class="message-chip @(observation?.Sequence == e.Sequence ? "active" : "")" @onclick="() => SelectObservation(e)">@e.Title <small>@(e.Provenance == Provenance.RecordBytes ? "wire" : $"{e.Peer} endpoint") · @e.Outcome</small></button> }
+                            </div>
+                        </article>
+                    }
+                </div>
+                @if (mode == "Guided Learning")
+                {
+                    <div class="guided-history"><h3>Walk through captured milestones</h3><p>Reading backwards leaves the live TLS state untouched. Use Next above for record delivery.</p><div class="history-buttons"><button disabled="@(HistoryIndex <= 0)" @onclick="() => BrowseHistory(-1)">← Previous observation</button><button disabled="@(HistoryIndex >= History.Count - 1)" @onclick="() => BrowseHistory(1)">Next observation →</button></div><span class="small">@(History.Count == 0 ? "Waiting for observations" : $"{Math.Max(0, HistoryIndex) + 1} of {History.Count} captured handshake observations")</span></div>
+                }
+            }
+            <div class="sequence-legend"><span>○ Plaintext on wire</span><span>● AEAD-protected on wire</span><span>Dashed = awaiting delivery</span></div>
+        </section>
+        <PeerPanel Session="session" Side="PeerSide.Server" Active="@(activePeer == PeerSide.Server)" OnTopic="SelectTopic" />
+    </section>
+
+    @if (selectedRecord is not null || observation is not null)
+    {
+        <section class="record-inspector panel"><div class="section-heading"><div><div class="eyebrow">Evidence / inspect the current selection</div><h2>@(showEndpoint && observation is not null ? observation.Title : selectedRecord?.Label)</h2></div><div class="segmented"><button class="@(!showEndpoint ? "active" : "")" disabled="@(selectedRecord is null)" @onclick="() => showEndpoint = false">Wire record</button><button class="@(showEndpoint ? "active" : "")" disabled="@(observation?.EndpointBytes is null)" @onclick="() => showEndpoint = true">Handshake observation</button></div></div>
+            @if (showEndpoint && observation?.EndpointBytes is { } endpoint)
+            {
+                <p class="observation-label">@observation.Provenance · @observation.Peer · observation #@observation.Sequence · @observation.Outcome · @observation.State</p><p>@observation.Detail</p>
+                <ByteInspector Bytes="endpoint" Fields="RecordDecoder.DecodeHandshake(endpoint)" Caption="Actual reassembled handshake bytes. Encrypted messages are visible here only inside the receiving endpoint." OnTopic="SelectTopic" />
+            }
+            else if (selectedRecord is { } wire)
+            {
+                <p class="observation-label">Observed in record bytes · @wire.Sender → @wire.Receiver · @wire.Status · payload @wire.PayloadLength bytes</p>
+                @if (wire.Encrypted) { <p>This is ciphertext. Outer type 23 does not reveal whether the content is a handshake, alert or application data. Select a captured endpoint message to inspect decrypted handshake content.</p> }
+                <ByteInspector Bytes="wire.Bytes" Fields="wire.Fields" Caption="Exact TLS record from ReadOutput; these same bytes are passed to OfferInput." OnTopic="SelectTopic" />
+            }
+        </section>
+    }
+
+    <section class="messaging panel"><div class="section-heading"><div><div class="eyebrow">After the handshake</div><h2>Send something through the channel</h2></div><InfoPopover Label="AEAD" Topic="application-data" OnTopic="SelectTopic" /></div>
+        <p>@(session?.CanMessage == true ? session.Options.RequireClientCertificate ? "Both endpoints are authenticated. Send queues a protected record; Next delivers it." : "Server authenticated; client unauthenticated. This unprivileged greeting demonstrates channel protection only." : "Messaging opens after both TLS engines complete and the configured authentication checks succeed.")</p>
+        <div class="message-forms"><div><label for="client-message">Client plaintext</label><textarea id="client-message" maxlength="4096" @bind="clientMessage"></textarea><button disabled="@(session?.CanMessage != true || running)" @onclick="() => Send(PeerSide.Client)">Send from client →</button></div><div><label for="server-message">Server plaintext</label><textarea id="server-message" maxlength="4096" @bind="serverMessage"></textarea><button disabled="@(session?.CanMessage != true || running)" @onclick="() => Send(PeerSide.Server)">← Send from server</button></div></div>
+        @if (session?.Messages.Count > 0)
+        { <div class="message-log">@foreach (var msg in session.Messages) { <div><span class="badge @(msg.Received ? "success" : "")">@(msg.Received ? "Recovered at receiver" : "Submitted at sender")</span> <span>@msg.Sender → @(msg.Sender == PeerSide.Client ? "Server" : "Client")</span> <code>@msg.Plaintext</code>@if (msg.RecordId is { } id) { <small>Delivered record #@id</small> }</div> }</div> }
+    </section>
+
+    <LessonPanel Lesson="Content.Get(topic)" Depth="progress.Depth" Pinned="pinned" PinChanged="value => pinned = value" Observation="observation" Session="session" OnTopic="SelectTopic" Answer="CurrentAnswer" OnAnswer="AnswerQuestion" Completed="progress.Completed.Contains(topic)" OnComplete="CompleteTopic" />
+
+    <section class="reference-library" id="reference-library"><div class="section-heading"><div><div class="eyebrow">Keep exploring</div><h2>A field guide to trust</h2></div><span class="badge">@Content.Lessons.Count lessons · @Content.Glossary.Count concepts · offline</span></div>
+        <div class="course-grid">@foreach (var course in Content.Courses) { <article class="course-card"><div class="eyebrow">Guided pathway</div><h3>@course.Title</h3><p>@course.Description</p><progress value="@course.Topics.Count(progress.Completed.Contains)" max="@course.Topics.Length" aria-label="@course.Title completion"></progress><small>@course.Topics.Count(progress.Completed.Contains) / @course.Topics.Length topics completed</small><ol>@foreach (var id in course.Topics) { <li><button class="text-button" @onclick="() => SelectTopic(id)">@(progress.Completed.Contains(id) ? "✓ " : "")@Content.Get(id).Title</button></li> }</ol><p class="course-experiment"><strong>Try it:</strong> @course.Experiment</p></article> }</div>
+        <p class="muted small">Course completion and answers are stored in this browser tab's session storage for the running application. No account or database is used. @storageNotice</p>
+        <div class="library-grid"><section><h3>All lessons</h3><div class="lesson-index">@foreach (var lesson in Content.Lessons) { <button class="@(topic == lesson.Id ? "selected" : "")" @onclick="() => SelectTopic(lesson.Id)">@lesson.Title <span>↗</span></button> }</div></section><section><h3>Search the glossary</h3><label class="sr-only" for="glossary-search">Search terms or explanations</label><input id="glossary-search" placeholder="Try ‘key share’, ‘trust’, ‘Finished’…" @bind="search" @bind:event="oninput" /><div class="glossary-list">@foreach (var entry in Content.Glossary.Where(x => string.IsNullOrWhiteSpace(search) || (x.Term + x.Definition + x.Explanation).Contains(search, StringComparison.OrdinalIgnoreCase))) { <details><summary>@entry.Term</summary><p><strong>@entry.Definition</strong></p><p>@entry.Explanation</p><p>@entry.Significance</p><small>Related: @string.Join(" · ", entry.Related)</small><button class="text-button" @onclick="() => SelectTopic(entry.Topic)">Open detailed lesson →</button><a class="small" href="@Content.Get(entry.Topic).Rfcs[0].Url" target="_blank" rel="noopener noreferrer">RFC reference ↗</a></details> }</div></section></div>
+    </section>
+    @if (session is not null)
+    {
+        <details class="trace-table panel"><summary>Structured trace · @session.Events.Count observations · session @session.Id.ToString()[..8]</summary><p class="small">Provenance: RecordBytes = actual wire data; TlsImplementation = endpoint instrumentation; Callback = validation/peer callback; LocalState = application state. Record association identifies the triggering/completing record.</p><div class="table-scroll"><table><thead><tr><th>#</th><th>Peer</th><th>Event</th><th>Provenance</th><th>Record</th><th>Outcome</th><th>State / source</th></tr></thead><tbody>@foreach (var e in session.Events) { <tr><td>@e.Sequence</td><td>@e.Peer</td><td><button class="text-button" @onclick="() => SelectObservation(e)">@e.Title</button><small>@e.Detail</small></td><td>@e.Provenance</td><td>@e.RecordId</td><td>@e.Outcome</td><td><code>@e.State</code><small>@e.Source</small></td></tr> }</tbody></table></div></details>
+    }
+    <footer class="page-footer"><span>mTLS Laboratory / Learn by observing.</span><p>The control page uses local HTTP. The experimental TLS connection runs between independent peers inside this .NET process. Teaching use only; no operating-system certificate installation or external TLS service.</p></footer>
+</main>
+
+@code {
+    private TlsSession? session;
+    private string scenario = "mutual", mode = "Protocol Execution", topic = "overview", search = "";
+    private bool useClientB, trustIndependent, running, pinned, showEndpoint, disposed;
+    private int interval = 500;
+    private PeerSide? activePeer;
+    private WireRecord? selectedRecord;
+    private TraceEvent? observation;
+    private string clientMessage = "Hello, authenticated server.", serverMessage = "Hello, authenticated client.";
+    private string? notice, storageNotice;
+    private LearningProgress progress = new();
+    private CancellationTokenSource? runCancellation;
+    private Task? runTask;
+    private IJSObjectReference? browserModule;
+    private long? revealRecord;
+    private LabOptions CurrentOptions => new(scenario, trustIndependent, useClientB);
+    private int? CurrentAnswer => progress.Answers.TryGetValue(topic, out var answer) ? answer : null;
+    private List<TraceEvent> History => session?.Events.Where(x => x.HandshakeType is not null).ToList() ?? [];
+    private int HistoryIndex => History.FindIndex(x => x.Sequence == observation?.Sequence);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                browserModule = await JS.InvokeAsync<IJSObjectReference>("import", "./lab.js");
+                var result = await Storage.GetAsync<LearningProgress>("mtls-learning-v1");
+                if (result.Success && result.Value is not null) progress = result.Value;
+            }
+            catch (Exception ex) when (ex is JSException or System.Security.Cryptography.CryptographicException)
+            { storageNotice = "Previous progress could not be restored; this session starts fresh."; }
+            StateHasChanged();
+        }
+        if (revealRecord is { } id && browserModule is not null)
+        {
+            revealRecord = null;
+            try { await browserModule.InvokeVoidAsync("revealRecord", $"record-{id}"); } catch (JSDisconnectedException) { }
+        }
+    }
+    private async Task SaveProgress()
+    {
+        try { await Storage.SetAsync("mtls-learning-v1", progress); }
+        catch (JSException) { storageNotice = "Browser storage is unavailable; progress is retained in this live session."; }
+    }
+    private async Task ChangeDepth(ChangeEventArgs args) { if (Enum.TryParse<LearningDepth>(args.Value?.ToString(), out var depth)) { progress.Depth = depth; await SaveProgress(); } }
+    private async Task AnswerQuestion(int answer) { progress.Answers[topic] = answer; await SaveProgress(); }
+    private async Task CompleteTopic() { progress.Completed.Add(topic); await SaveProgress(); }
+    private void SelectTopic(string id) { if (Content.Contains(id)) topic = id; }
+    private async Task Start()
+    {
+        await Pause(); session?.Dispose(); session = null;
+        selectedRecord = null; observation = null; notice = null; activePeer = null;
+        try
+        {
+            session = new TlsSession(CurrentOptions);
+            SelectObservation(session.Events.Last(x => x.Kind == "plaintext-handshake"));
+        }
+        catch (Exception ex) { notice = $"Could not initialise the experiment: {ex.Message}"; }
+    }
+    private void Next()
+    {
+        if (session is null || running) return;
+        try { session.Next(); AfterStep(); } catch (Exception ex) { notice = ex.Message; }
+    }
+    private void AfterStep()
+    {
+        if (session is null) return;
+        var record = session.Records.OrderByDescending(x => x.DeliveryOrder ?? 0).First();
+        activePeer = record.Receiver;
+        revealRecord = record.Id;
+        var e = session.Events.LastOrDefault(x => x.RecordId == record.Id && x.Kind is "handshake" or "failure" or "application-receive");
+        if (e is not null) SelectObservation(e); else SelectRecord(record);
+    }
+    private Task Run()
+    {
+        if (session is null || running) return Task.CompletedTask;
+        notice = null; running = true; runCancellation = new();
+        runTask = RunLoop(session, runCancellation.Token);
+        return Task.CompletedTask;
+    }
+    private async Task RunLoop(TlsSession current, CancellationToken token)
+    {
+        try { await current.RunAsync(TimeSpan.FromMilliseconds(interval), token, async () => { if (!disposed) await InvokeAsync(() => { AfterStep(); StateHasChanged(); }); }); }
+        catch (Exception ex) { notice = ex.Message; }
+        finally { running = false; if (!disposed) await InvokeAsync(StateHasChanged); }
+    }
+    private async Task Pause()
+    {
+        runCancellation?.Cancel(); if (runTask is not null) await runTask;
+        runCancellation?.Dispose(); runCancellation = null; runTask = null; running = false;
+    }
+    private void SelectRecord(WireRecord record) { selectedRecord = record; showEndpoint = false; observation = null; if (!pinned) topic = "records"; }
+    private void SelectObservation(TraceEvent e)
+    {
+        observation = e; selectedRecord = session?.Records.FirstOrDefault(x => x.Id == e.RecordId); showEndpoint = e.EndpointBytes is not null;
+        if (!pinned) topic = e.Topic;
+    }
+    private void BrowseHistory(int direction) { var h = History; if (h.Count == 0) return; SelectObservation(h[Math.Clamp(HistoryIndex + direction, 0, h.Count - 1)]); }
+    private void Send(PeerSide sender)
+    {
+        try { session?.Send(sender, sender == PeerSide.Client ? clientMessage : serverMessage); if (session is not null) { SelectRecord(session.Records.Last()); if (!pinned) topic = "application-data"; } notice = null; }
+        catch (Exception ex) { notice = ex.Message; }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        disposed = true; await Pause(); session?.Dispose();
+        if (browserModule is not null) { try { await browserModule.DisposeAsync(); } catch (JSDisconnectedException) { } }
+    }
+}

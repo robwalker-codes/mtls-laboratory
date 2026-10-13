@@ -1,0 +1,32 @@
+<div class="crypto-visual">
+    <div class="eyebrow">Conceptual relationships · no live secrets displayed</div>
+    <div class="diagram-switch" aria-label="Cryptography diagram">
+        @foreach (var mode in Modes) { <button class="@(mode == selected ? "active" : "")" @onclick="() => selected = mode">@mode</button> }
+    </div>
+    @if (selected == "Key agreement")
+    {
+        <div class="crypto-flow three"><div><h4>Client</h4><p>Private scalar <em>a</em></p><code>Public A = aG</code></div><div class="crypto-centre"><span>Public points cross the transport</span><strong>A → &nbsp; ← B</strong><small>The private scalars never cross.</small></div><div><h4>Server</h4><p>Private scalar <em>b</em></p><code>Public B = bG</code></div></div>
+        <div class="diagram-result">aB = bA → shared secret input to HKDF</div>
+        <p>A public point is safe to share. Identity still needs the certificate and transcript signature.</p>
+    }
+    else if (selected == "Key schedule")
+    {
+        <div class="schedule"><div>Zero PSK input → <b>Early secret</b></div><span>↓ derived secret + ECDHE → HKDF-Extract</span><div><b>Handshake secret</b> + transcript through ServerHello</div><span>↙ client / server handshake traffic secrets ↘</span><div>Directional handshake keys &amp; IVs · Finished keys</div><span>↓ derived secret + zero input → HKDF-Extract</span><div><b>Master secret</b> + transcript through server Finished</div><span>↓ client / server application traffic secrets</span><div>Directional application keys &amp; IVs</div></div>
+        <p>Each derivation uses the specified HKDF labels and context. This diagram omits resumption and early-data branches.</p>
+    }
+    else if (selected == "Proofs")
+    {
+        <div class="proof-grid"><div><h4>CA signature</h4><p>CA private key + certificate contents</p><strong>↓</strong><p>Verified with issuer public key</p><small>Who vouches for this identity and key?</small></div><div><h4>CertificateVerify</h4><p>Leaf private key + contextualised transcript</p><strong>↓</strong><p>Verified with accepted leaf public key</p><small>Does this endpoint possess that key?</small></div><div><h4>Finished</h4><p>Derived finished_key + transcript hash</p><strong>↓</strong><p>Verified with the expected HMAC</p><small>Do the keys and transcript agree?</small></div></div>
+    }
+    else
+    {
+        <div class="crypto-flow three"><div><h4>Sender</h4><code>Application plaintext</code><p>WriteApplicationData</p></div><div class="crypto-centre"><strong>AEAD-protected record</strong><p>Ciphertext + authentication tag</p><small>Record header is authenticated context.</small></div><div><h4>Receiver</h4><code>Verified plaintext</code><p>OfferInput → ReadInput</p></div></div>
+        <p>The record layer manages keys, nonces and authentication. The page does not perform its own encryption.</p>
+    }
+</div>
+@code {
+    [Parameter] public string Topic { get; set; } = "key-share";
+    private static readonly string[] Modes = ["Key agreement", "Key schedule", "Proofs", "Record protection"];
+    private string selected = "Key agreement", previous = "";
+    protected override void OnParametersSet() { if (previous != Topic) { selected = Topic switch { "key-schedule" or "finished" => "Key schedule", "certificate-verify" or "certificate" or "signatures" => "Proofs", "application-data" or "records" => "Record protection", _ => "Key agreement" }; previous = Topic; } }
+}

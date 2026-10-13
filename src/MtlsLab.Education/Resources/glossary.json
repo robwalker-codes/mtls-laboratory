@@ -1,0 +1,530 @@
+[
+  {
+    "term": "TLS",
+    "definition": "Transport Layer Security protects a channel over an untrusted transport.",
+    "explanation": "TLS negotiates keys and algorithms, authenticates peers according to policy and protects application records. The version explored here is TLS 1.3.",
+    "significance": "A TLS connection is useful only when peer validation matches the service you intended to reach.",
+    "topic": "overview",
+    "related": [
+      "Secure channel",
+      "Authentication"
+    ]
+  },
+  {
+    "term": "TCP",
+    "definition": "An ordered, reliable byte-stream transport.",
+    "explanation": "TCP handles delivery and retransmission but does not itself authenticate service identities or encrypt payloads. This lab substitutes a memory queue at the transport boundary.",
+    "significance": "Record boundaries must be parsed independently of transport read boundaries.",
+    "topic": "records",
+    "related": [
+      "TLS record",
+      "Handshake message"
+    ]
+  },
+  {
+    "term": "Confidentiality",
+    "definition": "Keeping message content unavailable to unauthorised observers.",
+    "explanation": "Record encryption hides plaintext while leaving some metadata, including lengths and timing, observable. An endpoint still sees its own plaintext.",
+    "significance": "Inspect ciphertext on the wire and plaintext inside the receiver to see the boundary.",
+    "topic": "secure-channel",
+    "related": [
+      "Integrity",
+      "AEAD"
+    ]
+  },
+  {
+    "term": "Integrity",
+    "definition": "Detecting unauthorised changes to protected data.",
+    "explanation": "TLS record authentication and handshake transcript checks reject modified data. Encryption without integrity would not supply the same protection.",
+    "significance": "An attacker changing record bytes must not cause changed unauthenticated plaintext to reach the application.",
+    "topic": "secure-channel",
+    "related": [
+      "AEAD",
+      "Finished"
+    ]
+  },
+  {
+    "term": "Authentication",
+    "definition": "Establishing an identity using acceptable evidence.",
+    "explanation": "Certificate authentication combines local trust decisions with proof of private-key possession and transcript confirmation. A displayed certificate alone is incomplete evidence.",
+    "significance": "Watch the distinction between certificate acceptance and the final handshake callback.",
+    "topic": "mutual-tls",
+    "related": [
+      "Authorisation",
+      "Proof of possession"
+    ]
+  },
+  {
+    "term": "Authorisation",
+    "definition": "Deciding which actions an identity may perform.",
+    "explanation": "Application permission rules operate above the TLS channel. Different client certificates under one trusted issuer can represent different users and rights.",
+    "significance": "A successful mTLS handshake must not be treated as an administrator role.",
+    "topic": "authorisation",
+    "related": [
+      "Authentication",
+      "Mutual authentication"
+    ]
+  },
+  {
+    "term": "Mutual authentication",
+    "definition": "Both peers authenticate each other.",
+    "explanation": "In this lab the server requests a client certificate and both directions use independent trust policies and certificate proofs. Trust is not automatically symmetric.",
+    "significance": "Compare server-only and mutual scenarios before changing trust anchors.",
+    "topic": "mutual-tls",
+    "related": [
+      "CertificateRequest",
+      "Trust anchor"
+    ]
+  },
+  {
+    "term": "TLS record",
+    "definition": "A five-byte header followed by a length-delimited payload.",
+    "explanation": "A record carries a fragment whose content may be plaintext or protected TLSInnerPlaintext. It may not align with a handshake message.",
+    "significance": "Next delivers one record, including all actual consequences inside the receiving engine.",
+    "topic": "records",
+    "related": [
+      "Handshake message",
+      "TLSInnerPlaintext"
+    ]
+  },
+  {
+    "term": "Handshake message",
+    "definition": "A typed, uint24-length-encoded handshake structure.",
+    "explanation": "Messages such as ClientHello and Finished have a four-byte handshake header. They can span records or share a record.",
+    "significance": "Use endpoint inspection for reassembled handshake messages.",
+    "topic": "records",
+    "related": [
+      "ClientHello",
+      "TLS record"
+    ]
+  },
+  {
+    "term": "ClientHello",
+    "definition": "The client's initial version, algorithm and key-share proposal.",
+    "explanation": "It includes compatibility fields, fresh random data and extensions. Its public ephemeral share contributes to key agreement but does not authenticate the client.",
+    "significance": "Select its fields to relate real values to byte offsets.",
+    "topic": "client-hello",
+    "related": [
+      "Key share",
+      "Cipher suite"
+    ]
+  },
+  {
+    "term": "ServerHello",
+    "definition": "The server's selected parameters and public key share.",
+    "explanation": "The server chooses a compatible version, cipher suite and share. Handshake traffic keys can then be established before the identity proof arrives.",
+    "significance": "Do not label this point as authenticated handshake completion.",
+    "topic": "server-hello",
+    "related": [
+      "Supported Versions",
+      "HKDF"
+    ]
+  },
+  {
+    "term": "Supported Versions",
+    "definition": "The extension that negotiates the TLS version.",
+    "explanation": "TLS 1.3 uses 0x0304 in this extension while retaining older values in legacy fields. A record-header version is not the negotiated version.",
+    "significance": "Compare the extension with the completed peer version.",
+    "topic": "versions",
+    "related": [
+      "ClientHello",
+      "ServerHello"
+    ]
+  },
+  {
+    "term": "Cipher suite",
+    "definition": "A named record-protection and hash combination in TLS 1.3.",
+    "explanation": "TLS_AES_128_GCM_SHA256 specifies AES-128-GCM and SHA-256. It does not select the certificate signature scheme or the key-agreement group.",
+    "significance": "Inspect all three choices separately.",
+    "topic": "client-hello",
+    "related": [
+      "AEAD",
+      "Signature Algorithms"
+    ]
+  },
+  {
+    "term": "Signature Algorithms",
+    "definition": "The advertised acceptable signature schemes.",
+    "explanation": "A SignatureScheme constrains handshake proofs and, through related rules, certificate signatures. CertificateRequest advertises schemes for client authentication.",
+    "significance": "A compatible signing credential is separate from an acceptable certificate purpose.",
+    "topic": "signature-algorithms",
+    "related": [
+      "Digital signature",
+      "CertificateVerify"
+    ]
+  },
+  {
+    "term": "Key share",
+    "definition": "A public ephemeral key-exchange value and its named group.",
+    "explanation": "The sender keeps its ephemeral private scalar private. Each receiver combines its own private value with the other public value to agree a secret.",
+    "significance": "The public share can be inspected safely; the corresponding private value is never logged.",
+    "topic": "key-share",
+    "related": [
+      "ECDHE",
+      "Forward secrecy"
+    ]
+  },
+  {
+    "term": "ECDHE",
+    "definition": "Elliptic-curve Diffie–Hellman with ephemeral keys.",
+    "explanation": "Fresh private scalars and public points create shared entropy. The certificate signing key authenticates the exchange rather than supplying this entropy.",
+    "significance": "Fresh sessions produce different public shares even with the same selected group.",
+    "topic": "key-share",
+    "related": [
+      "Key share",
+      "Forward secrecy"
+    ]
+  },
+  {
+    "term": "HKDF",
+    "definition": "A hash-based key derivation function.",
+    "explanation": "Extract combines secret inputs; Expand derives purpose-specific outputs. TLS 1.3 adds structured labels and transcript context.",
+    "significance": "Distinct labels separate directions and phases without exposing live secrets in the UI.",
+    "topic": "key-schedule",
+    "related": [
+      "Traffic secret",
+      "HMAC"
+    ]
+  },
+  {
+    "term": "HMAC",
+    "definition": "A message authentication code built from a hash and secret key.",
+    "explanation": "Unlike a public-key signature, verification requires the appropriate shared secret. TLS Finished uses HMAC over a transcript hash.",
+    "significance": "Distinguish Finished from the certificate-key signature in CertificateVerify.",
+    "topic": "finished",
+    "related": [
+      "Transcript hash",
+      "Digital signature"
+    ]
+  },
+  {
+    "term": "Transcript hash",
+    "definition": "A hash of the relevant handshake encodings.",
+    "explanation": "TLS hashes handshake messages with defined exclusions and special retry handling. Record headers and compatibility ChangeCipherSpec are not handshake transcript messages.",
+    "significance": "Changes to negotiation or authentication messages affect later checks.",
+    "topic": "finished",
+    "related": [
+      "CertificateVerify",
+      "HelloRetryRequest"
+    ]
+  },
+  {
+    "term": "Traffic secret",
+    "definition": "A directional, phase-specific secret used to derive record keys.",
+    "explanation": "Client/server handshake and application traffic secrets are distinct. Keys and IVs are expanded from them with labelled derivation.",
+    "significance": "The lab shows derivation relationships but never live traffic secrets.",
+    "topic": "key-schedule",
+    "related": [
+      "HKDF",
+      "Nonce"
+    ]
+  },
+  {
+    "term": "Forward secrecy",
+    "definition": "Protection of past sessions from later signing-key compromise.",
+    "explanation": "Ephemeral key agreement prevents a later certificate-key leak from reconstructing old session secrets from recorded public shares alone.",
+    "significance": "Secret retention, key logs and endpoint compromise can defeat the intended benefit.",
+    "topic": "forward-secrecy",
+    "related": [
+      "ECDHE",
+      "Private key"
+    ]
+  },
+  {
+    "term": "SNI",
+    "definition": "Server Name Indication identifies the intended virtual host in ClientHello.",
+    "explanation": "The client sends localhost in this lab. SNI helps choose a server configuration; it is not a certificate check or proof of identity.",
+    "significance": "Compare the reference hostname with SAN during validation instead of trusting SNI as evidence.",
+    "topic": "identity",
+    "related": [
+      "SAN",
+      "Reference identity"
+    ]
+  },
+  {
+    "term": "SAN",
+    "definition": "Subject Alternative Name lists certificate identities such as DNS names.",
+    "explanation": "The server leaf names localhost in a DNS SAN. The mismatch leaf names only wrong.example. The lab does not fall back to the common name.",
+    "significance": "A valid chain for the wrong DNS name must fail.",
+    "topic": "identity",
+    "related": [
+      "SNI",
+      "Reference identity"
+    ]
+  },
+  {
+    "term": "Reference identity",
+    "definition": "The identity the client intended to authenticate.",
+    "explanation": "It is obtained from trusted local service configuration, not chosen from peer-provided certificate text. Here it is always localhost.",
+    "significance": "Peer-controlled reference identities would make hostname validation meaningless.",
+    "topic": "identity",
+    "related": [
+      "SAN",
+      "Authentication"
+    ]
+  },
+  {
+    "term": "X.509",
+    "definition": "The certificate format used for public-key identities.",
+    "explanation": "A certificate includes signed identity, key, issuer, validity and extension data. TLS transports DER-encoded certificate bytes inside its own handshake framing.",
+    "significance": "Distinguish X.509 fields from TLS message and record headers.",
+    "topic": "certificate",
+    "related": [
+      "Certificate chain",
+      "Digital signature"
+    ]
+  },
+  {
+    "term": "Certificate authority",
+    "definition": "An issuer that signs certificates for subjects.",
+    "explanation": "A CA certificate has CA Basic Constraints and appropriate signing Key Usage. Whether its issued identities are accepted depends on the receiver's trust policy.",
+    "significance": "A CA subject name alone does not establish trust.",
+    "topic": "path-validation",
+    "related": [
+      "Trust anchor",
+      "Basic Constraints"
+    ]
+  },
+  {
+    "term": "PKI",
+    "definition": "Public-key infrastructure for issuing and validating credentials.",
+    "explanation": "The lab generates a demonstration root, an independent root and endpoint certificates in memory. There are no external enrolment or revocation services.",
+    "significance": "The examples teach trust relationships without modifying your operating-system stores.",
+    "topic": "certificate",
+    "related": [
+      "Certificate authority",
+      "Revocation"
+    ]
+  },
+  {
+    "term": "Trust anchor",
+    "definition": "An authority accepted by local validation policy.",
+    "explanation": "The CustomTrustStore holds explicit anchor certificates. A root transmitted by the peer remains untrusted unless the receiver independently selects it.",
+    "significance": "Changing the server anchor set can change which clients are admitted.",
+    "topic": "path-validation",
+    "related": [
+      "Certificate authority",
+      "Certificate chain"
+    ]
+  },
+  {
+    "term": "Certificate chain",
+    "definition": "An ordered certification path from a leaf towards an issuer anchor.",
+    "explanation": "Issuer signatures connect the path while constraints, lifetime and intended purpose also restrict acceptance. The lab uses a direct leaf-to-root chain.",
+    "significance": "Building a path is not identical to validating the intended hostname.",
+    "topic": "path-validation",
+    "related": [
+      "Trust anchor",
+      "SAN"
+    ]
+  },
+  {
+    "term": "Basic Constraints",
+    "definition": "An extension indicating whether a certificate may act as a CA.",
+    "explanation": "CA certificates may also constrain path length. Endpoint leaves in this lab explicitly state that they are not CAs.",
+    "significance": "A signing-capable endpoint key should not be confused with an authority authorised to issue certificates.",
+    "topic": "purpose",
+    "related": [
+      "Key Usage",
+      "Certificate authority"
+    ]
+  },
+  {
+    "term": "Key Usage",
+    "definition": "An extension restricting cryptographic key operations.",
+    "explanation": "DigitalSignature is required for our endpoint keys; keyCertSign and cRLSign are used for roots. This is distinct from application-level EKU.",
+    "significance": "Check both KU and EKU when explaining a certificate rejection.",
+    "topic": "purpose",
+    "related": [
+      "Extended Key Usage",
+      "Basic Constraints"
+    ]
+  },
+  {
+    "term": "Extended Key Usage",
+    "definition": "An extension restricting the purposes of a certificate.",
+    "explanation": "serverAuth and clientAuth are separate OIDs. The lab requires the expected purpose explicitly and rejects a serverAuth-only client leaf.",
+    "significance": "A trusted signature does not override a wrong purpose.",
+    "topic": "purpose",
+    "related": [
+      "Key Usage",
+      "Authentication"
+    ]
+  },
+  {
+    "term": "Revocation",
+    "definition": "Invalidating a credential before its natural expiry.",
+    "explanation": "Production systems may consult CRLs or OCSP according to policy. The self-contained lab disables revocation checks and certificate downloads.",
+    "significance": "A successful lab path check is not production-equivalent revocation assurance.",
+    "topic": "path-validation",
+    "related": [
+      "Certificate authority",
+      "Validity period"
+    ]
+  },
+  {
+    "term": "Validity period",
+    "definition": "The notBefore and notAfter interval of a certificate.",
+    "explanation": "The local validation time must fall inside the permitted interval. The expired experiment changes this property while preserving issuer and purpose.",
+    "significance": "Inspect actual dates and the recorded verification time.",
+    "topic": "path-validation",
+    "related": [
+      "Revocation",
+      "Certificate chain"
+    ]
+  },
+  {
+    "term": "Public key",
+    "definition": "The shareable half of an asymmetric key pair.",
+    "explanation": "Its role depends on the algorithm: it can verify signatures or contribute to key agreement. It does not let an observer generate the corresponding private-key proof.",
+    "significance": "The certificate inspector displays public key parameters and bytes.",
+    "topic": "signatures",
+    "related": [
+      "Private key",
+      "Digital signature"
+    ]
+  },
+  {
+    "term": "Private key",
+    "definition": "The secret half of an asymmetric key pair.",
+    "explanation": "A certificate private key signs proofs; an ephemeral agreement private key contributes to a fresh shared secret. These are independent keys in this lab.",
+    "significance": "Do not commit keys or publish debugger dumps containing them.",
+    "topic": "signatures",
+    "related": [
+      "Public key",
+      "ECDHE"
+    ]
+  },
+  {
+    "term": "Digital signature",
+    "definition": "A publicly verifiable proof made with a private signing key.",
+    "explanation": "CA signatures authenticate certificate contents; CertificateVerify signs a contextualised handshake transcript. Signatures do not hide the signed data.",
+    "significance": "Ask which key signs which exact bytes before interpreting a proof.",
+    "topic": "signatures",
+    "related": [
+      "CertificateVerify",
+      "Public key"
+    ]
+  },
+  {
+    "term": "Proof of possession",
+    "definition": "Evidence that the peer controls the private key for an accepted public identity.",
+    "explanation": "CertificateVerify supplies a transcript-bound signature. A copied certificate has no corresponding capability to generate a valid fresh proof.",
+    "significance": "Certificate acceptance is an intermediate state, not completed authentication.",
+    "topic": "certificate-verify",
+    "related": [
+      "Digital signature",
+      "Authentication"
+    ]
+  },
+  {
+    "term": "CertificateRequest",
+    "definition": "The server's request for a client certificate.",
+    "explanation": "The request carries signature schemes and optional CA-name hints. A required empty response causes a real failure in this laboratory.",
+    "significance": "Its absence in server-only mode explains why the client is not authenticated.",
+    "topic": "certificate-request",
+    "related": [
+      "Mutual authentication",
+      "Signature Algorithms"
+    ]
+  },
+  {
+    "term": "CertificateVerify",
+    "definition": "The certificate-key signature over the contextualised handshake transcript.",
+    "explanation": "Role-specific strings and transcript hashing bind the proof to this endpoint role and negotiated connection. Bouncy Castle verifies the actual signature.",
+    "significance": "Compare its signature scheme and bytes with Finished's different MAC structure.",
+    "topic": "certificate-verify",
+    "related": [
+      "Proof of possession",
+      "Finished"
+    ]
+  },
+  {
+    "term": "Finished",
+    "definition": "The transcript MAC proving possession of a derived handshake secret.",
+    "explanation": "The sender derives a finished_key from its handshake traffic secret and authenticates the relevant transcript hash. Each direction has its own check.",
+    "significance": "Both completion callbacks matter before the lab opens its messaging gate.",
+    "topic": "finished",
+    "related": [
+      "HMAC",
+      "Transcript hash"
+    ]
+  },
+  {
+    "term": "AEAD",
+    "definition": "Authenticated encryption with associated data.",
+    "explanation": "AES-GCM protects content while authenticating ciphertext and record-header context. A modified tag must be rejected before plaintext is released.",
+    "significance": "Encryption and integrity are combined at the record boundary.",
+    "topic": "application-data",
+    "related": [
+      "Nonce",
+      "Integrity"
+    ]
+  },
+  {
+    "term": "Nonce",
+    "definition": "A per-record value used with the AEAD key.",
+    "explanation": "TLS combines a directional static IV with an implicit record sequence number. The counter is not the UI display sequence and is not transmitted in the header.",
+    "significance": "Key/nonce uniqueness is enforced by the TLS implementation, not the page.",
+    "topic": "application-data",
+    "related": [
+      "AEAD",
+      "Traffic secret"
+    ]
+  },
+  {
+    "term": "TLSInnerPlaintext",
+    "definition": "The decrypted structure inside an encrypted TLS 1.3 record.",
+    "explanation": "It contains content, the true inner content type and optional zero padding. The outer type remains application_data even for encrypted handshake messages.",
+    "significance": "Only endpoint inspection can reveal this inner content here.",
+    "topic": "records",
+    "related": [
+      "TLS record",
+      "EncryptedExtensions"
+    ]
+  },
+  {
+    "term": "EncryptedExtensions",
+    "definition": "The encrypted response carrying non-key-establishment extension choices.",
+    "explanation": "It follows ServerHello under handshake keys and precedes server authentication messages. An empty extension list can be valid.",
+    "significance": "Do not infer plaintext fields from the outer encrypted record.",
+    "topic": "encrypted-extensions",
+    "related": [
+      "TLSInnerPlaintext",
+      "ServerHello"
+    ]
+  },
+  {
+    "term": "ChangeCipherSpec",
+    "definition": "A compatibility record sometimes emitted during TLS 1.3 handshakes.",
+    "explanation": "Its plaintext payload is 0x01. In TLS 1.3 it is not the instruction that installs the negotiated handshake keys, and it is not in the handshake transcript.",
+    "significance": "Count it as a real record delivery without inventing a handshake milestone.",
+    "topic": "records",
+    "related": [
+      "TLS record",
+      "Transcript hash"
+    ]
+  },
+  {
+    "term": "HelloRetryRequest",
+    "definition": "A conditional request to revise a ClientHello key share.",
+    "explanation": "It uses a special ServerHello random and changes the transcript construction through message_hash. The default compatible P-256 exchange does not require it.",
+    "significance": "A lesson about a conditional branch does not mean the branch occurred.",
+    "topic": "hello-retry",
+    "related": [
+      "Key share",
+      "Transcript hash"
+    ]
+  },
+  {
+    "term": "TLS alert",
+    "definition": "A protocol notification of error or closure.",
+    "explanation": "Raised and received callbacks are separate events. An encrypted alert may be visible locally while its transport record remains queued.",
+    "significance": "Read actual alert descriptions alongside local validation diagnostics.",
+    "topic": "alerts",
+    "related": [
+      "Certificate chain",
+      "TLS record"
+    ]
+  }
+]

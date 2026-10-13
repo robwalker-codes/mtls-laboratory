@@ -1,0 +1,45 @@
+<div class="byte-inspector">
+    <p class="inspector-caption">@Caption <span class="mono">@Bytes.Length bytes</span></p>
+    <div class="byte-columns">
+        <div class="field-list" aria-label="Decoded fields">
+            @foreach (var field in Fields)
+            {
+                <div class="field-row">
+                    <button class="field-button @(selected == field ? "selected" : "")" @onclick="() => selected = field">
+                        <span>@field.Name</span><small class="mono">offset @field.Offset · @field.Length B</small>
+                        <code>@Short(field.Value)</code>
+                    </button>
+                    <InfoPopover Topic="@field.Topic" Label="@field.Name" OnTopic="OnTopic" />
+                </div>
+            }
+        </div>
+        <div>
+            <div class="hex-grid" aria-label="Hexadecimal bytes; selecting a field highlights its byte range">
+                @for (int i = 0; i < Math.Min(Bytes.Length, expanded ? 65536 : 2048); i++)
+                {
+                    var index = i;
+                    <span title="Byte @index" class="@(selected is not null && index >= selected.Offset && index < selected.Offset + selected.Length ? "byte-active" : "")">@Bytes[i].ToString("X2")</span>
+                }
+            </div>
+            @if (Bytes.Length > 2048)
+            {
+                <button class="text-button" @onclick="() => expanded = !expanded">@(expanded ? "Collapse bytes" : "Show all captured bytes")</button>
+            }
+            @if (selected is not null)
+            {
+                <p class="field-value"><strong>@selected.Name</strong><br /><code>@selected.Value</code></p>
+            }
+        </div>
+    </div>
+</div>
+@code {
+    [Parameter, EditorRequired] public byte[] Bytes { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<DecodedField> Fields { get; set; } = [];
+    [Parameter] public string Caption { get; set; } = "";
+    [Parameter] public EventCallback<string> OnTopic { get; set; }
+    private DecodedField? selected;
+    private byte[]? previous;
+    private bool expanded;
+    protected override void OnParametersSet() { if (!ReferenceEquals(previous, Bytes)) { selected = null; expanded = false; previous = Bytes; } }
+    private static string Short(string text) => text.Length > 90 ? text[..90] + "…" : text;
+}

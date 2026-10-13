@@ -1,0 +1,16 @@
+<fieldset class="knowledge-check">
+    <legend>Check your understanding</legend>
+    <p>@Lesson.Check.Question</p>
+    @for (int i = 0; i < Lesson.Check.Answers.Length; i++)
+    {
+        var index = i;
+        <button aria-pressed="@(Answer == index)" class="answer @(Answer == index ? "selected" : "")" @onclick="() => OnAnswer.InvokeAsync(index)"><span class="mono">@((char)('A' + i))</span> @Lesson.Check.Answers[i]</button>
+    }
+    @if (Answer is not null)
+    { <p role="status" class="answer-explanation"><strong>@(Answer == Lesson.Check.CorrectIndex ? "Correct. " : "Reconsider this. ")</strong>@Lesson.Check.Explanation</p> }
+</fieldset>
+@code {
+    [Parameter, EditorRequired] public Lesson Lesson { get; set; } = default!;
+    [Parameter] public int? Answer { get; set; }
+    [Parameter] public EventCallback<int> OnAnswer { get; set; }
+}

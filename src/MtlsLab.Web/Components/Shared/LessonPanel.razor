@@ -1,0 +1,79 @@
+<section class="lesson-panel @(expanded ? "expanded" : "")" id="learning-panel" aria-label="Learning panel">
+    <div class="lesson-heading">
+        <div><div class="eyebrow">Field notes / @DepthLabel</div><h2>@Lesson.Title</h2><p>@Lesson.Definition</p></div>
+        <div class="lesson-actions"><button aria-pressed="@Pinned" @onclick="() => PinChanged.InvokeAsync(!Pinned)">@(Pinned ? "Unpin topic" : "Pin topic")</button><button aria-expanded="@expanded" @onclick="() => expanded = !expanded">@(expanded ? "Compact" : "Expand")</button></div>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Lesson sections">
+        @foreach (var item in Tabs)
+        { <button role="tab" aria-selected="@(tab == item)" class="@(tab == item ? "active" : "")" @onclick="() => tab = item">@item</button> }
+    </div>
+    <div class="lesson-body" role="tabpanel" aria-label="@tab">
+        @if (tab == "Overview")
+        {
+            <div class="lesson-prose">
+                <div class="purpose"><strong>What problem does this solve?</strong><p>@Lesson.Purpose</p></div>
+                @foreach (var paragraph in Lesson.Explanation(Depth).Split("\n\n")) { <p>@paragraph</p> }
+                <div class="security-note"><strong>Security property</strong><p>@Lesson.Security</p></div>
+                <KnowledgeCheckView Lesson="Lesson" Answer="Answer" OnAnswer="OnAnswer" />
+            </div>
+        }
+        else if (tab == "Message Structure")
+        {
+            <h3>Fields to investigate</h3>
+            <ul>@foreach (var field in Lesson.Fields) { <li>@field</li> }</ul>
+            @if (Observation?.EndpointBytes is { } bytes)
+            {
+                <p class="observation-label">Selected observation: @Observation.Title · @Observation.Provenance · @Observation.Outcome. @(Observation.Topic == Lesson.Id ? "Matches this lesson." : "This observation is from another topic; the lesson is being browsed independently.")</p>
+                <ByteInspector Bytes="bytes" Fields="RecordDecoder.DecodeHandshake(bytes)" Caption="Reassembled handshake encoding · offsets begin at the handshake header." OnTopic="OnTopic" />
+            }
+            else
+            { <p>Select a captured handshake message in the sequence or trace to inspect actual values. Encrypted wire bytes cannot be decoded into these fields without endpoint observation.</p> }
+        }
+        else if (tab == "Cryptography")
+        {
+            <CryptoDiagram Topic="@Lesson.Id" />
+            <div class="lesson-prose">@foreach (var paragraph in Lesson.Internals.Split("\n\n")) { <p>@paragraph</p> }</div>
+            <p>Related concepts: @string.Join(" · ", Lesson.Concepts)</p>
+        }
+        else if (tab == "Certificates & Trust")
+        {
+            <p>@Lesson.Security</p>
+            <CertificateInspector Session="Session" OnTopic="OnTopic" />
+        }
+        else if (tab == "Source Code")
+        {
+            <p>The running TLS engine is BouncyCastle.Cryptography 2.7.0. These links are pinned to its release commit. Protected and internal methods are breakpoint targets, not public application APIs.</p>
+            @foreach (var source in Lesson.Sources)
+            {
+                <article class="source-card"><span class="eyebrow">Bouncy Castle / C#</span><h3>@source.Member</h3><code>@source.File:@source.Line</code><p>@source.Inspect</p><a href="@source.Url" target="_blank" rel="noopener noreferrer">View C# Source ↗</a></article>
+            }
+            @if (Observation is not null) { <p>Selected trace entry point: <code>@Observation.Source</code>. Observation #@Observation.Sequence is @Observation.Provenance.</p> }
+            <p>Use <code>docs/DEBUGGING.md</code> in the repository for symbols, a verified optional local-source build and a breakpoint tour. Source links open externally; all teaching text works offline.</p>
+        }
+        else
+        {
+            @foreach (var rfc in Lesson.Rfcs)
+            { <article class="source-card"><span class="eyebrow">Normative specification</span><h3>RFC @rfc.Number §@rfc.Section — @rfc.Title</h3><p>@rfc.Relevance</p><a href="@rfc.Url" target="_blank" rel="noopener noreferrer">Read this RFC section ↗</a></article> }
+            <p>Read the specification alongside the trace. A conceptual explanation or conditional branch is not evidence that an event occurred in this session.</p>
+        }
+    </div>
+    <footer class="lesson-footer"><div>Continue exploring: @foreach (var id in Lesson.Related) { <button class="text-button" @onclick="() => OnTopic.InvokeAsync(id)">@Content.Get(id).Title →</button> }</div><button class="@(Completed ? "completed" : "primary")" @onclick="OnComplete">@(Completed ? "✓ Topic completed" : "Mark topic complete")</button></footer>
+</section>
+@code {
+    [Inject] public ContentCatalogue Content { get; set; } = default!;
+    [Parameter, EditorRequired] public Lesson Lesson { get; set; } = default!;
+    [Parameter] public LearningDepth Depth { get; set; }
+    [Parameter] public bool Pinned { get; set; }
+    [Parameter] public bool Completed { get; set; }
+    [Parameter] public int? Answer { get; set; }
+    [Parameter] public TraceEvent? Observation { get; set; }
+    [Parameter] public TlsSession? Session { get; set; }
+    [Parameter] public EventCallback<string> OnTopic { get; set; }
+    [Parameter] public EventCallback<bool> PinChanged { get; set; }
+    [Parameter] public EventCallback<int> OnAnswer { get; set; }
+    [Parameter] public EventCallback OnComplete { get; set; }
+    private string tab = "Overview";
+    private bool expanded;
+    private string DepthLabel => Depth == LearningDepth.Internals ? "Protocol Internals" : Depth.ToString();
+    private static readonly string[] Tabs = ["Overview", "Message Structure", "Cryptography", "Certificates & Trust", "Source Code", "RFC Reference"];
+}

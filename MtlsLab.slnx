@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MtlsLab.Certificates/MtlsLab.Certificates.csproj" />
+    <Project Path="src/MtlsLab.Core/MtlsLab.Core.csproj" />
+    <Project Path="src/MtlsLab.Education/MtlsLab.Education.csproj" />
+    <Project Path="src/MtlsLab.Tls/MtlsLab.Tls.csproj" />
+    <Project Path="src/MtlsLab.Web/MtlsLab.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MtlsLab.Tests/MtlsLab.Tests.csproj" />
+  </Folder>
+</Solution>

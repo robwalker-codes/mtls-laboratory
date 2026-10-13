@@ -1,0 +1,1308 @@
+[
+  {
+    "id": "overview",
+    "title": "TLS 1.3: building an authenticated channel",
+    "definition": "A handshake turns an untrusted byte transport into a channel with negotiated keys, integrity and authenticated peers.",
+    "beginner": "Imagine sending a sealed letter to a stranger whose identity matters. You need more than a seal: you need to agree how to seal it, check who the stranger is, and ensure nobody changed the agreement. TLS performs these jobs before the application exchanges its own messages.\n\nIn this laboratory the client and server are separate objects inside one process. They exchange real TLS records through a queue. You control when a record arrives. The HTTP page you are reading is only the control surface; it is not the experimental TLS connection.",
+    "engineer": "A full TLS 1.3 certificate handshake combines ephemeral key agreement, an HKDF key schedule, certificate-path validation, signatures over the handshake transcript and Finished MACs. The cipher suite names the record-protection algorithm and transcript hash. It does not choose the certificate key type or the key-agreement group; those have their own extensions.\n\nClientHello and ServerHello establish parameters and public key shares. Subsequent handshake messages are encrypted. The server presents its certificate, signs a transcript-bound proof and sends Finished. When requested, the client does the same. Each peer has its own completion point; receiving the server's Finished does not prove that the server has accepted the client's certificate.\n\nWatch the two completion callbacks and both validation reports. The laboratory enables messaging only after both handshakes and the configured authentication requirements succeed. A valid chain alone is an intermediate decision, not a complete authenticated session.",
+    "internals": "TlsClientProtocol.Connect and TlsServerProtocol.Accept initialise independent state machines using their parameterless, non-blocking constructors. ReadOutput drains actual record bytes; OfferInput consumes them at the receiver. OfferInput may synchronously decrypt a record, reassemble multiple messages, invoke certificate callbacks and generate a whole response flight.\n\nThe subclasses intercept HandleHandshakeMessage at the endpoint. The stream contains the complete handshake encoding, including the four-byte header; its current position is already after that header. Taking ToArray preserves the parser position. The base implementation still performs every cryptographic check. No callback is blocked to manufacture a pause.\n\nThis is a fresh certificate handshake with no resumption or early data. Only TLS 1.3, AES-128-GCM/SHA-256, P-256 ECDHE and P-256 ECDSA credentials are enabled, making comparisons reproducible without reusing any keys.",
+    "purpose": "Establish shared protocol parameters and authenticated keys before accepting application messages.",
+    "security": "Confidentiality and integrity require successful authentication of the intended peer, not simply encryption.",
+    "fields": [
+      "Negotiated version",
+      "Cipher suite",
+      "Peer completion callbacks",
+      "Certificate validation reports"
+    ],
+    "bindings": [
+      "Peer.Version",
+      "Peer.Cipher",
+      "complete events"
+    ],
+    "concepts": [
+      "ECDHE",
+      "HKDF",
+      "Mutual authentication"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "2",
+        "title": "Protocol Overview",
+        "relevance": "Establish shared protocol parameters and authenticated keys before accepting application messages."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsClientProtocol.cs",
+        "member": "Connect",
+        "line": 60,
+        "inspect": "Follow BeginHandshake into ClientHello generation."
+      }
+    ],
+    "related": [
+      "client-hello",
+      "records",
+      "mutual-tls"
+    ],
+    "check": {
+      "question": "When is mutual authentication complete?",
+      "answers": [
+        "When ServerHello arrives",
+        "When both peers have validated the required credentials, proofs and Finished messages",
+        "When a certificate is displayed"
+      ],
+      "correctIndex": 1,
+      "explanation": "A certificate is public data. The handshake must bind each accepted identity to possession of its key and to the negotiated channel."
+    }
+  },
+  {
+    "id": "client-hello",
+    "title": "ClientHello: a proposal with real public key material",
+    "definition": "The first handshake message advertises capabilities, an intended server name and ephemeral public key shares.",
+    "beginner": "The client starts by describing what it can use: the TLS versions, protection algorithms and key-exchange methods it understands. It also sends a fresh random value and the public half of a temporary key pair. The server needs this proposal to choose a compatible way to protect the conversation.\n\nA public key share is designed to be seen by everyone. Its private partner stays inside the client. Seeing the public share does not let an observer calculate the shared secret. It also does not tell the server who the client is: identity is proved later with a certificate and a signature.",
+    "engineer": "A handshake header contains a one-byte message type (1) and a three-byte body length. The body starts with legacy_version, a 32-byte random and a length-prefixed legacy_session_id. For TLS 1.3 the legacy version is 0x0303; supported_versions is the authoritative version offer. These compatibility fields let the new protocol coexist with equipment that expects older shapes.\n\nThe cipher_suites vector offers record-protection/hash combinations. This lab offers TLS_AES_128_GCM_SHA256. The legacy_compression_methods vector contains only the null method: TLS compression is not negotiated here. The extension vector separately advertises supported_versions, supported_groups, signature_algorithms and key_share. server_name supplies localhost as SNI so the receiving server can select its configuration; SNI is not evidence of server identity.\n\nA key_share entry pairs a named group with a length-prefixed public value. Our P-256 share is fresh per session and distinct from the long-lived signing key in the certificate. Its purpose is key agreement, not signing or client authentication. The server selects a compatible group and returns its share. Both derive a secret that never crosses the transport.\n\nSelect a captured ClientHello, then choose Message Structure. Field values and byte offsets come from this session's encoding, not a template. Compare the selected cipher and group with ServerHello. Resetting changes the random and key-share bytes even though the configured capabilities stay the same.",
+    "internals": "The wire contains a five-byte record header followed by one or more handshake fragments. A handshake uint24 length counts only the message body. Vectors use different length widths: session ID uses uint8, cipher suites and extensions use uint16. The field inspector operates on a reassembled handshake, so its offsets start at the handshake type; wire-header offsets are shown separately.\n\nsupported_versions uses extension type 43 with a uint8-length client vector of uint16 versions. key_share uses type 51 with a uint16-length vector of group/opaque16 entries. signature_algorithms uses type 13 with a uint16 vector of SignatureScheme values. supported_groups is type 10; SNI is type 0 with its own nested list. The current values are selectable in the inspector, including the complete public point bytes. None of these fields contains a private scalar.\n\nSendClientHello constructs capabilities and ephemeral agreement state; SendClientHelloMessage serialises the message and contributes it to the handshake transcript. That transcript later binds the negotiation to CertificateVerify and Finished. TLS 1.3 does not authenticate this first message immediately; tampering is detected by later transcript-dependent checks. In a retry, the first ClientHello is represented by a synthetic message_hash and the second is constrained by RFC 8446 §4.1.4.\n\nA record can contain a fragment or several messages. The transport frames records without treating them as messages, while Bouncy Castle reassembles the handshake. Endpoint observations refer to the record that completes each message.",
+    "purpose": "Give the server sufficient public information to choose compatible parameters and start ephemeral key agreement.",
+    "security": "The key share provides no identity proof; later transcript signatures and Finished checks authenticate the negotiation.",
+    "fields": [
+      "Handshake type and uint24 length",
+      "legacy_version / random / legacy_session_id",
+      "Cipher suites and null compression",
+      "supported_versions / supported_groups",
+      "signature_algorithms / key_share / server_name"
+    ],
+    "bindings": [
+      "plaintext-handshake: ClientHello",
+      "EndpointBytes",
+      "DecodedField.Offset and Length"
+    ],
+    "concepts": [
+      "Key share",
+      "SNI",
+      "Transcript hash",
+      "Cipher suite"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.1.2",
+        "title": "Client Hello",
+        "relevance": "Give the server sufficient public information to choose compatible parameters and start ephemeral key agreement."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsClientProtocol.cs",
+        "member": "SendClientHello",
+        "line": 1681,
+        "inspect": "Inspect offered extensions and the client agreement objects before serialisation."
+      }
+    ],
+    "related": [
+      "server-hello",
+      "key-share",
+      "versions",
+      "signature-algorithms"
+    ],
+    "check": {
+      "question": "Why can the client safely transmit its public key share?",
+      "answers": [
+        "The share is itself encrypted by the certificate",
+        "The group makes recovering the private scalar from the public point computationally infeasible",
+        "The share authenticates Client A"
+      ],
+      "correctIndex": 1,
+      "explanation": "For the selected elliptic-curve group, the public point can be disclosed without disclosing the private scalar. Authentication is a separate, later proof."
+    }
+  },
+  {
+    "id": "server-hello",
+    "title": "ServerHello: choosing the channel parameters",
+    "definition": "The server selects the TLS version, cipher suite and key share that establish handshake traffic keys.",
+    "beginner": "The server answers the proposal with one compatible set of choices and its own temporary public key. The client and server can now independently calculate the same secret. They never send that secret to each other.\n\nAt this point you have a basis for encryption, but the client has not yet established that the server is the intended identity. Keep stepping to see the certificate and proof arrive inside encrypted records.",
+    "engineer": "ServerHello contains legacy_version, random, the echoed legacy session ID, a selected cipher suite, null compression and extensions. supported_versions selects TLS 1.3. key_share identifies the chosen group and the server's ephemeral public value. These choices must be compatible with ClientHello; a peer cannot silently choose parameters that were not offered.\n\nThis is the last ordinary unencrypted handshake message in the initial TLS 1.3 exchange. Once the key agreement and transcript through ServerHello are available, HKDF derives directional handshake traffic secrets. EncryptedExtensions and authentication messages follow under handshake keys.\n\nDo not confuse this with handshake completion or with the certificate key. The server's ephemeral share participates in key agreement; its certificate signing key proves identity later. A special random value instead denotes HelloRetryRequest, a conditional path that is absent from our default run.",
+    "internals": "Read the legacy 0x0303 fields alongside the selected 0x0304 supported_versions value. The record header and legacy fields are compatibility syntax. The server's key_share has a single group and opaque16 key exchange, rather than the client's enclosing vector.\n\nIn the managed implementation, the server establishes the handshake phase before writing its encrypted flight. The client processes ServerHello and enables the corresponding read cipher. Both derive different keys for each direction using the same shared secret but different HKDF labels. Check Handle13HandshakeMessage and Establish13PhaseHandshake in a debugger to distinguish key establishment from the later verification of identity.\n\nThe UI does not expose the shared secret or traffic keys. Public message bytes, negotiation results and endpoint handler boundaries are sufficient to observe the transition into encryption.",
+    "purpose": "Commit the server to compatible negotiated parameters and complete the public key-share exchange.",
+    "security": "Parameter negotiation is bound into the later authenticated transcript.",
+    "fields": [
+      "Selected cipher suite",
+      "supported_versions",
+      "key_share",
+      "Server random"
+    ],
+    "bindings": [
+      "ServerHello endpoint event",
+      "Client.Version after completion"
+    ],
+    "concepts": [
+      "Key share",
+      "HKDF",
+      "Transcript hash"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.1.3",
+        "title": "Server Hello",
+        "relevance": "Commit the server to compatible negotiated parameters and complete the public key-share exchange."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsServerProtocol.cs",
+        "member": "Send13ServerHelloCoda",
+        "line": 1441,
+        "inspect": "Inspect the transition from ServerHello to the encrypted server flight."
+      }
+    ],
+    "related": [
+      "key-schedule",
+      "encrypted-extensions",
+      "hello-retry"
+    ],
+    "check": {
+      "question": "Does ServerHello alone authenticate the server?",
+      "answers": [
+        "Yes, its public key is enough",
+        "No, certificate validation, CertificateVerify and Finished still matter"
+      ],
+      "correctIndex": 1,
+      "explanation": "An attacker can generate an ephemeral key too. Identity is established by the later certificate-based proof bound to the handshake."
+    }
+  },
+  {
+    "id": "hello-retry",
+    "title": "HelloRetryRequest: a conditional branch",
+    "definition": "The server can request a different key share when the client supports a suitable group but did not send a usable share.",
+    "beginner": "Sometimes the peers agree on a key-exchange method but the client has not supplied the public value the server needs. The server asks for a revised proposal. This costs another round trip.\n\nThis lesson is a reference branch. The default laboratory uses a compatible P-256 share, so a normal trace does not show a retry. Reading about it does not insert an event into your session.",
+    "engineer": "HelloRetryRequest uses the ServerHello structure with a distinguished random value. It may request a selected group and a cookie. The second ClientHello is tightly constrained: the client cannot treat the retry as a fresh, unrelated negotiation or arbitrarily change all its capabilities.\n\nA retry is different from a TLS alert. It continues a viable handshake instead of reporting failure. The server cannot repeatedly demand retries; TLS 1.3 limits the path to prevent loops and ambiguous transcript histories. Sending an acceptable share in the first ClientHello avoids this extra flight.",
+    "internals": "RFC 8446 replaces the original ClientHello in the transcript with a synthetic message_hash handshake containing Hash(ClientHello1). The transcript then includes HelloRetryRequest and ClientHello2. This preserves binding to the original offer while allowing implementations to discard its full bytes.\n\nTlsClientProtocol.Send13ClientHelloRetry constructs the revised client message using the selected group. To explore this conditional path in source, inspect its callers and the server's distinguished-random handling. Our shipped scenarios do not trigger HRR and the UI deliberately does not label an ordinary ServerHello as a retry.",
+    "purpose": "Recover a viable key exchange without pretending an unsupported initial share is acceptable.",
+    "security": "Retry constraints and transcript binding protect continuity of the negotiation.",
+    "fields": [
+      "Distinguished ServerHello random",
+      "Selected group",
+      "Optional cookie",
+      "Synthetic message_hash"
+    ],
+    "bindings": [],
+    "concepts": [
+      "Key share",
+      "Transcript hash"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.1.4",
+        "title": "Hello Retry Request",
+        "relevance": "Recover a viable key exchange without pretending an unsupported initial share is acceptable."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsClientProtocol.cs",
+        "member": "Send13ClientHelloRetry",
+        "line": 1600,
+        "inspect": "Inspect how the second ClientHello differs from the first."
+      }
+    ],
+    "related": [
+      "client-hello",
+      "key-share"
+    ],
+    "check": {
+      "question": "Should a successful default trace include a fabricated retry milestone?",
+      "answers": [
+        "Yes, every lesson needs a packet",
+        "No, only an actually observed retry is a protocol event"
+      ],
+      "correctIndex": 1,
+      "explanation": "Educational coverage does not establish that the conditional branch occurred."
+    }
+  },
+  {
+    "id": "versions",
+    "title": "Supported Versions and compatibility fields",
+    "definition": "The supported_versions extension negotiates TLS 1.3 while legacy fields retain older wire encodings.",
+    "beginner": "A version number tells the peer which protocol rules to use. TLS 1.3 keeps a few older-looking numbers for compatibility, so reading only the record header can be misleading. The dedicated version extension carries the real offer and selection.",
+    "engineer": "A TLS 1.3 ClientHello sets legacy_version to 0x0303 and advertises 0x0304 in supported_versions. The server echoes a legacy value but selects TLS 1.3 in its own extension. The record-layer legacy_record_version is also not the negotiated TLS version. In particular, the first ClientHello record can use a compatibility value of 0x0301.\n\nTLS 1.3 removes obsolete key exchanges and ciphers, reduces the ordinary handshake round trips and encrypts most handshake messages after ServerHello. It does not merely rename TLS 1.2 cipher suites. This lab restricts both peers to TLS 1.3; fallback to an older protocol is not a success path.",
+    "internals": "Extension 43 has different client and server encodings: the client sends an opaque8-length list of ProtocolVersion values; the server selects one uint16. A compliant TLS 1.3 implementation must apply the supported_versions rules instead of interpreting legacy_version as the highest offered version.\n\nInspect AbstractTlsClient.GetClientExtensions and TlsClientProtocol.SendClientHello. Check the actual extension bytes against the peer's negotiated version after completion. TLS downgrade detection also uses server random markers when a TLS 1.3-capable server negotiates an earlier version; our TLS-1.3-only configuration does not exercise that branch.",
+    "purpose": "Negotiate the protocol version explicitly while remaining compatible with older network equipment.",
+    "security": "Authentication covers the negotiated version through the handshake transcript.",
+    "fields": [
+      "legacy_record_version",
+      "legacy_version",
+      "supported_versions"
+    ],
+    "bindings": [
+      "ClientHello fields",
+      "ServerHello fields",
+      "Peer.Version"
+    ],
+    "concepts": [
+      "Protocol version",
+      "Downgrade"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.2.1",
+        "title": "Supported Versions",
+        "relevance": "Negotiate the protocol version explicitly while remaining compatible with older network equipment."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/AbstractTlsClient.cs",
+        "member": "GetClientExtensions",
+        "line": 245,
+        "inspect": "Compare version extension construction with legacy fields."
+      }
+    ],
+    "related": [
+      "client-hello",
+      "server-hello"
+    ],
+    "check": {
+      "question": "Does a record header value 0x0303 prove that the session uses TLS 1.2?",
+      "answers": [
+        "Yes",
+        "No; inspect supported_versions and the negotiated version"
+      ],
+      "correctIndex": 1,
+      "explanation": "TLS 1.3 deliberately retains legacy record-layer values."
+    }
+  },
+  {
+    "id": "signature-algorithms",
+    "title": "Signature Algorithms: agreeing on proofs",
+    "definition": "SignatureScheme values advertise algorithms acceptable for handshake signatures and certificate processing.",
+    "beginner": "A digital signature can be checked with a public key but only made with its private partner. The peers need compatible signature methods. Advertising them lets the other peer choose a suitable certificate and signing method.\n\nThis is separate from choosing how messages are encrypted. A signing key does not serve as the temporary key-agreement secret in this TLS 1.3 exchange.",
+    "engineer": "signature_algorithms lists supported SignatureScheme values, such as ecdsa_secp256r1_sha256. These constrain CertificateVerify signatures. signature_algorithms_cert, when present, separately constrains signatures on certificates; when absent, the main signature_algorithms rules also apply to certificates.\n\nThe server's CertificateRequest advertises acceptable algorithms for client authentication. The client must select a matching credential or send an empty certificate list if it has none. In our failure experiments we deliberately present the configured certificate to let the server's real trust policy evaluate it; a CA-name hint alone is not proof of trust.\n\nThe laboratory uses P-256 ECDSA certificates signed with SHA-256 and an explicit compatible TLS signature scheme. The AES-GCM cipher suite does not select this ECDSA scheme.",
+    "internals": "Extension type 13 contains a uint16-length vector of uint16 SignatureScheme codes. 0x0403 means ecdsa_secp256r1_sha256. In TLS 1.3 this binds the certificate curve and hash for CertificateVerify, beyond the older generic ECDSA/hash pair interpretation.\n\nBcDefaultTlsCredentialedSigner creates the managed signer for the private key and selected scheme. GetClientCredentials checks the actual CertificateRequest list before returning the credential. Bouncy Castle then constructs and verifies the contextualised TLS 1.3 signature. No UI checkbox bypasses that verification.",
+    "purpose": "Choose signatures that each peer can verify using an appropriate certificate.",
+    "security": "Scheme selection must match the offered capabilities and the certificate key.",
+    "fields": [
+      "SignatureScheme vector",
+      "Selected CertificateVerify scheme"
+    ],
+    "bindings": [
+      "ClientHello signature_algorithms",
+      "CertificateRequest fields",
+      "CertificateVerify fields"
+    ],
+    "concepts": [
+      "Digital signature",
+      "CertificateVerify"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.2.3",
+        "title": "Signature Algorithms",
+        "relevance": "Choose signatures that each peer can verify using an appropriate certificate."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/crypto/impl/bc/BcDefaultTlsCredentialedSigner.cs",
+        "member": "MakeSigner",
+        "line": 12,
+        "inspect": "Inspect the key-type and scheme dispatch."
+      }
+    ],
+    "related": [
+      "certificate-verify",
+      "signatures"
+    ],
+    "check": {
+      "question": "What does TLS_AES_128_GCM_SHA256 specify?",
+      "answers": [
+        "ECDSA certificate keys",
+        "The record AEAD and key-schedule hash, not the certificate signature scheme"
+      ],
+      "correctIndex": 1,
+      "explanation": "Signature schemes and key-agreement groups are negotiated independently of the TLS 1.3 cipher suite."
+    }
+  },
+  {
+    "id": "key-share",
+    "title": "Ephemeral key agreement and Key Share",
+    "definition": "Public ephemeral values let two peers derive the same shared secret without transmitting it.",
+    "beginner": "Each peer chooses a temporary private value and publishes the corresponding public value. Combining your private value with the other peer's public value produces a shared result. Both peers get the same result; an observer with only public values cannot feasibly calculate it.\n\nThe temporary values are new for every experiment. They are not the public and private signing keys in the certificates. Use the diagram to compare their roles without revealing any live private values.",
+    "engineer": "The key_share extension carries the group and public key-exchange encoding. supported_groups says which groups the client supports; key_share says which shares it actually generated for this first flight. The server chooses a compatible share, or may request a retry.\n\nThis lab uses P-256 ECDHE. An elliptic-curve point is public; the random scalar that produced it is private. Both endpoints compute the shared elliptic-curve result and feed its agreed-secret encoding into HKDF. They never use the raw shared secret directly as an application encryption key.\n\nEphemeral exchange provides forward secrecy when private ephemeral material and derived secrets are discarded. It does not authenticate the peers. A man-in-the-middle can establish two separate exchanges unless certificate validation, CertificateVerify and Finished bind the intended identity to this transcript.",
+    "internals": "Conceptually, A=aG and B=bG are the public points; aB=bA is the shared point. These equations explain the relationship, not the byte-level secret extraction rules. The actual curve arithmetic and agreed-secret processing are performed by Bouncy Castle.\n\nOur current KeyShareEntry uses named group 23 (secp256r1) with an opaque16 public point encoding. Select the key_share fields in ClientHello and ServerHello to compare actual public values. The server passes the negotiated agreement into Establish13PhaseHandshake, which derives handshake traffic secrets from the transcript and shared secret. The UI never exports a, b or live traffic secrets.",
+    "purpose": "Establish fresh shared entropy over a transport visible to an observer.",
+    "security": "Forward secrecy depends on ephemeral key erasure; authentication remains a separate requirement.",
+    "fields": [
+      "Named group",
+      "Key exchange byte length",
+      "Public point encoding"
+    ],
+    "bindings": [
+      "ClientHello key_share",
+      "ServerHello key_share"
+    ],
+    "concepts": [
+      "ECDHE",
+      "Forward secrecy",
+      "HKDF"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.2.8",
+        "title": "Key Share",
+        "relevance": "Establish fresh shared entropy over a transport visible to an observer."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsUtilities.cs",
+        "member": "Establish13PhaseHandshake",
+        "line": 1767,
+        "inspect": "Inspect the agreement input and derivation call without exporting secrets."
+      }
+    ],
+    "related": [
+      "key-schedule",
+      "forward-secrecy",
+      "certificate-verify"
+    ],
+    "check": {
+      "question": "Is the public key share the client identity?",
+      "answers": [
+        "Yes",
+        "No; it is fresh key-agreement material"
+      ],
+      "correctIndex": 1,
+      "explanation": "The ephemeral exchange creates shared entropy. The certificate and transcript signature establish identity."
+    }
+  },
+  {
+    "id": "encrypted-extensions",
+    "title": "EncryptedExtensions: the protected negotiation response",
+    "definition": "The first encrypted server handshake message carries extension responses not needed to establish handshake keys.",
+    "beginner": "Once the peers can encrypt handshake traffic, the server sends the rest of its agreed settings inside that protection. A network observer can see an encrypted record and its length, but cannot read these settings from the wire bytes.\n\nThe laboratory can show the message at the client because it controls the receiving endpoint. That is different from decrypting a passive packet capture.",
+    "engineer": "ServerHello is restricted to extensions necessary for key establishment. EncryptedExtensions follows immediately afterwards and contains other responses to the ClientHello extensions, such as application protocol negotiation when configured. The current lab does not negotiate an application protocol, so a small or empty extension list is valid.\n\nIts outer record usually has content type application_data (23), even though the decrypted inner content is a handshake message. The sequence diagram preserves this distinction. Select the encrypted record for its real ciphertext, then select the receiving endpoint observation for the plaintext handshake structure.\n\nConfidentiality at this stage uses provisional handshake keys. The server's identity is authenticated later; successfully decrypting this message alone does not establish trust.",
+    "internals": "Handshake type 8 has an extensions<0..2^16-1> vector. Bouncy Castle's Send13EncryptedExtensionsMessage serialises it after the pending write cipher is enabled. At the receiver, record AEAD verification and TLSInnerPlaintext content-type recovery happen before HandleHandshakeMessage exposes a reassembled message.\n\nThe captured endpoint bytes are produced by that handler, not inferred from outer record type 23. A single record could complete several handshake messages. The trace associates each handler call with the record delivery that triggered it, while teaching navigation remains independent of protocol state.",
+    "purpose": "Protect extension negotiation that does not need to remain visible for initial key establishment.",
+    "security": "Handshake encryption hides content from passive observers but must still be authenticated by the completed handshake.",
+    "fields": [
+      "Handshake type 8",
+      "Extensions length and entries"
+    ],
+    "bindings": [
+      "EncryptedExtensions endpoint event",
+      "Encrypted wire record"
+    ],
+    "concepts": [
+      "TLSInnerPlaintext",
+      "AEAD"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.3.1",
+        "title": "Encrypted Extensions",
+        "relevance": "Protect extension negotiation that does not need to remain visible for initial key establishment."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsServerProtocol.cs",
+        "member": "Send13EncryptedExtensionsMessage",
+        "line": 1429,
+        "inspect": "Observe serialisation under handshake traffic keys."
+      }
+    ],
+    "related": [
+      "records",
+      "certificate-request",
+      "key-schedule"
+    ],
+    "check": {
+      "question": "Can a passive observer decode this message from outer type 23?",
+      "answers": [
+        "Yes, type 23 means readable application text",
+        "No; plaintext here comes from endpoint instrumentation"
+      ],
+      "correctIndex": 1,
+      "explanation": "The encrypted outer type conceals whether the inner content is a handshake, alert or application message."
+    }
+  },
+  {
+    "id": "certificate-request",
+    "title": "CertificateRequest: asking the client to prove an identity",
+    "definition": "The server requests a client certificate and specifies acceptable signing capabilities.",
+    "beginner": "Ordinary HTTPS usually proves the server's identity. Mutual TLS also asks the client to identify itself. CertificateRequest is the server's request for that proof.\n\nA client may have no appropriate certificate. It can send an empty list, after which a server requiring client authentication must reject access. Try the missing-certificate experiment to observe the laboratory's actual fatal alert.",
+    "engineer": "The server sends CertificateRequest during its encrypted handshake flight, before its own Certificate. The request includes signature_algorithms and may include certificate_authorities, a list of acceptable issuer distinguished names. These names guide credential selection; they do not replace chain validation against the server's configured trust anchors.\n\nFor initial-handshake authentication, certificate_request_context is empty. A non-empty context is used to correlate post-handshake requests, which this lab does not implement. The client responds after verifying the server flight, sending its Certificate, CertificateVerify when it has a certificate, and Finished.\n\nIn server-only mode this request is absent. The server completes TLS without a client certificate and the UI explicitly shows that the client is not authenticated. In required-client mode, an empty chain causes certificate_required in the server callback.",
+    "internals": "TLS 1.3 CertificateRequest differs from TLS 1.2: it carries an opaque8 request context and extension vector rather than the older certificate_types structure. LabServer.GetCertificateRequest constructs the TLS 1.3 overload using an empty context, ECDSA signature schemes and names from the server's custom trust store.\n\nGetClientCredentials observes the real request. The default client returns a BcDefaultTlsCredentialedSigner; the missing scenario returns null and Bouncy Castle emits the corresponding empty Certificate. NotifyClientCertificate evaluates the actual received chain, with no fabricated authentication flag.",
+    "purpose": "Let the server require a cryptographically proven client identity.",
+    "security": "A request is not authentication; the returned chain, purpose, proof and Finished must all be accepted.",
+    "fields": [
+      "Request context",
+      "signature_algorithms",
+      "certificate_authorities"
+    ],
+    "bindings": [
+      "CertificateRequest endpoint event",
+      "credentials callbacks"
+    ],
+    "concepts": [
+      "Mutual authentication",
+      "Certificate authority",
+      "Extended Key Usage"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.3.2",
+        "title": "Certificate Request",
+        "relevance": "Let the server require a cryptographically proven client identity."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsServerProtocol.cs",
+        "member": "Send13ServerHelloCoda",
+        "line": 1441,
+        "inspect": "Break at the GetCertificateRequest call and inspect the configured requirement."
+      }
+    ],
+    "related": [
+      "certificate",
+      "mutual-tls",
+      "purpose"
+    ],
+    "check": {
+      "question": "What does an acceptable CA-name hint prove?",
+      "answers": [
+        "That the returned certificate is trusted",
+        "Nothing by itself; the actual chain still needs validation"
+      ],
+      "correctIndex": 1,
+      "explanation": "A distinguished name is a selection hint, not a trust anchor or a signature check."
+    }
+  },
+  {
+    "id": "certificate",
+    "title": "Certificate: a public identity claim",
+    "definition": "An X.509 certificate binds a subject and public key under an issuer signature and a set of constraints.",
+    "beginner": "A certificate is like a signed identity card. It contains a public key, identity information, validity dates and permitted uses. The issuer signs these facts. A receiver must decide whether it trusts that issuer and whether the facts fit the intended use.\n\nAnyone can copy a certificate. Presenting it is not proof that the sender has the private key. CertificateVerify supplies that separate proof. Explore the actual leaf and root in the certificate inspector; their private keys are never displayed.",
+    "engineer": "The TLS Certificate message transports a chain of DER-encoded X.509 certificates, with the endpoint leaf first. A trust anchor comes from the receiver's local policy; sending a root certificate does not make it trusted. For clarity, the lab sends its directly issuing root along with the leaf. There is no intermediate CA in this demonstration chain.\n\nInspect subject, issuer, serial number, validity, SAN, Key Usage, Extended Key Usage, Basic Constraints, public-key parameters, signature algorithm and SHA-256 fingerprint. A fingerprint identifies these exact certificate bytes, but is not itself an issuer signature or proof of trust.\n\nBoth endpoints use ECDSA P-256 keys. The default server SAN names localhost; clients carry clientAuth EKU. Certificates are generated afresh in memory, with unique serial numbers, and are never installed in OS trust stores. The certificate's issuer signature authenticates its signed contents; the endpoint's separate CertificateVerify signature binds possession of the leaf key to this connection.",
+    "internals": "The TLS 1.3 body starts with certificate_request_context<0..255>, then a uint24-length certificate_list. Each entry carries an opaque24 DER certificate and its own uint16 extension vector. Handshake encoding, DER certificate encoding and record framing are three distinct layers with different length fields.\n\nReceive13ServerCertificate parses the TLS structure and invokes the authentication callback. Our callback loads public DER into X509Certificate2 and applies custom-root chain and identity checks. The protocol then independently verifies CertificateVerify using the peer certificate's public key. Inspect both boundaries to see why accepting the certificate is necessary but insufficient.",
+    "purpose": "Convey the public identity and public key that the receiver must validate.",
+    "security": "An issuer signature authenticates certificate contents; endpoint proof-of-possession is a separate TLS operation.",
+    "fields": [
+      "certificate_request_context",
+      "certificate_list",
+      "DER entries and entry extensions",
+      "X.509 inspector fields"
+    ],
+    "bindings": [
+      "Certificate endpoint event",
+      "Actual session certificate cards"
+    ],
+    "concepts": [
+      "X.509",
+      "Certificate chain",
+      "Digital signature"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.4.2",
+        "title": "Certificate",
+        "relevance": "Convey the public identity and public key that the receiver must validate."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsClientProtocol.cs",
+        "member": "Receive13ServerCertificate",
+        "line": 1533,
+        "inspect": "Step from TLS parsing into the application certificate callback."
+      }
+    ],
+    "related": [
+      "path-validation",
+      "certificate-verify",
+      "identity"
+    ],
+    "check": {
+      "question": "Why is presenting a valid certificate insufficient?",
+      "answers": [
+        "It is public and can be copied; the sender must prove possession of the private key",
+        "A certificate has no public key"
+      ],
+      "correctIndex": 0,
+      "explanation": "CertificateVerify proves possession for the current handshake; the CA signature alone does not."
+    }
+  },
+  {
+    "id": "certificate-verify",
+    "title": "CertificateVerify: possession bound to the transcript",
+    "definition": "A signature ties the authenticated certificate key to this role and this handshake.",
+    "beginner": "After showing an identity card, the peer must prove it owns the associated private key. It signs a description of the handshake so far. The receiver verifies the signature using the public key from the accepted certificate.\n\nA recorded signature from a different connection cannot simply be replayed as a valid proof for this one. The signed description depends on this handshake, including its fresh values and negotiation.",
+    "engineer": "CertificateVerify is distinct from the CA signature on the certificate. The CA signature vouches for a public key and identity binding over the certificate lifetime. CertificateVerify is made by the endpoint's private key and authenticates the current handshake transcript.\n\nTLS 1.3 signs 64 space bytes, a role-specific context string, a zero separator and the transcript hash. The server and client use different context strings to prevent cross-role confusion. The transcript includes the handshake messages preceding this proof, with the exact scope defined by RFC 8446 §4.4.3.\n\nThe message carries a SignatureScheme and a length-prefixed signature. Our endpoint inspector shows both from real decrypted message bytes. Bouncy Castle checks the scheme and verifies the signature. The event is marked processed only after the base handler returns successfully; entering the handler is not itself proof of acceptance.",
+    "internals": "For the server, the context is “TLS 1.3, server CertificateVerify”; for the client it is “TLS 1.3, client CertificateVerify”. Both are domain-separation strings. The selected transcript hash follows the cipher suite, while the signature scheme has its own algorithm requirements.\n\nThe handshake transcript is not a concatenation of TLS records: it hashes handshake encodings, excluding record headers and the compatibility ChangeCipherSpec. CertificateVerify itself is not included in the hash it signs, but is included in subsequent transcript calculations. Verify13CertificateVerifyServer and Verify13CertificateVerifyClient construct and verify the expected input using the accepted certificate.\n\nThe signature bytes are public proof material, safe to inspect. The signing scalar remains private. The live transcript hash and keys are available only to a conventional debugger, not automatically exported by the web UI.",
+    "purpose": "Prove possession of the certificate private key for this particular negotiated connection.",
+    "security": "Role-specific domain separation and transcript binding prevent a certificate copy or unrelated signature from authenticating the peer.",
+    "fields": [
+      "SignatureScheme",
+      "Signature byte length",
+      "Signature bytes"
+    ],
+    "bindings": [
+      "CertificateVerify endpoint bytes",
+      "Processed or rejected outcome"
+    ],
+    "concepts": [
+      "Digital signature",
+      "Transcript hash",
+      "Proof of possession"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.4.3",
+        "title": "Certificate Verify",
+        "relevance": "Prove possession of the certificate private key for this particular negotiated connection."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsUtilities.cs",
+        "member": "Verify13CertificateVerifyServer",
+        "line": 2358,
+        "inspect": "Inspect the expected context, transcript hash and public verification operation."
+      }
+    ],
+    "related": [
+      "finished",
+      "signatures",
+      "certificate"
+    ],
+    "check": {
+      "question": "What does CertificateVerify sign?",
+      "answers": [
+        "The plaintext application greeting",
+        "A contextualised handshake transcript hash",
+        "Only the certificate serial number"
+      ],
+      "correctIndex": 1,
+      "explanation": "The signature binds the endpoint role and handshake history to the accepted certificate key."
+    }
+  },
+  {
+    "id": "finished",
+    "title": "Finished: transcript integrity and key confirmation",
+    "definition": "A MAC derived from the handshake traffic secret authenticates the transcript and confirms key possession.",
+    "beginner": "The final handshake check asks: did we calculate compatible secrets and see the same conversation? Each peer sends a value derived from its handshake key and the messages so far. If the other side calculates a different result, the connection fails.\n\nThis is not another certificate signature. CertificateVerify proves possession of an identity key; Finished proves possession of the derived handshake secret and protects the full transcript up to that point.",
+    "engineer": "TLS 1.3 derives a finished_key from the sender's handshake traffic secret using HKDF-Expand-Label with the label “finished”. verify_data is HMAC(finished_key, Transcript-Hash(handshake context)). The receiving implementation calculates the expected value and performs a constant-time comparison.\n\nThe server sends Finished after its authentication messages. The client validates it, then sends its own authentication response when requested and its Finished. The server's completion callback therefore occurs after the client's. The laboratory waits for both before enabling messages.\n\nA callback saying the certificate chain is acceptable is not equivalent to this completion point. Finished also protects negotiated parameters and message ordering through the transcript. A handshake that fails this check cannot be trusted even if its certificate is otherwise valid.",
+    "internals": "Finished uses handshake type 20 with a body of Hash.length bytes. For the selected SHA-256 suite the verify_data length is 32 bytes. This is public-once-decrypted authentication data, not the finished_key itself. The inspector exposes only the endpoint-visible message bytes.\n\nTlsProtocol.Process13FinishedMessage calculates and compares the expected verify_data. The transcript used for the client Finished includes the server's Finished and the client's authentication messages where present. ChangeCipherSpec and record headers are excluded. CompleteHandshake commits the resulting connection state and notifies the peer.\n\nThe key schedule derives application traffic secrets using the transcript through the server Finished; this derivation point must not be confused with the laboratory's stricter application-access gate after both sides complete.",
+    "purpose": "Authenticate the handshake transcript and confirm that the peer has the derived handshake secret.",
+    "security": "Finished complements certificate-based signatures; it does not replace identity validation.",
+    "fields": [
+      "verify_data length",
+      "Endpoint-visible verify_data",
+      "Completion callbacks"
+    ],
+    "bindings": [
+      "Finished endpoint event",
+      "Both Peer.HandshakeComplete values"
+    ],
+    "concepts": [
+      "HMAC",
+      "HKDF",
+      "Transcript hash"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.4.4",
+        "title": "Finished",
+        "relevance": "Authenticate the handshake transcript and confirm that the peer has the derived handshake secret."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsProtocol.cs",
+        "member": "Process13FinishedMessage",
+        "line": 1566,
+        "inspect": "Break at the expected verify_data comparison, then follow CompleteHandshake."
+      }
+    ],
+    "related": [
+      "key-schedule",
+      "application-data",
+      "certificate-verify"
+    ],
+    "check": {
+      "question": "How does Finished differ from CertificateVerify?",
+      "answers": [
+        "Finished is a MAC using a derived handshake key; CertificateVerify uses the certificate private key",
+        "They are two names for the same signature"
+      ],
+      "correctIndex": 0,
+      "explanation": "They establish different properties: key confirmation/transcript integrity and certificate-key possession."
+    }
+  },
+  {
+    "id": "records",
+    "title": "TLS records: framing, encryption and delivery",
+    "definition": "Records frame protected or plaintext fragments; they are not equivalent to handshake messages.",
+    "beginner": "The transport carries envelopes called records. A handshake message can fill one envelope, share it with another message, or span several envelopes. “Next” releases one envelope to the receiving TLS implementation.\n\nProcessing that record can cause several internal events. The UI then stops before delivering the next record. To stop inside a cryptographic method, use a C# debugger breakpoint.",
+    "engineer": "A TLS record begins with content type (1 byte), legacy_record_version (2) and length (2), followed by that many payload bytes. The queue preserves the exact output of each peer. An incremental framer retains partial headers and payloads and can extract multiple records from a single output buffer.\n\nTLS 1.3 encrypted records use outer content type application_data. After decryption, TLSInnerPlaintext contains content, a real inner content type and optional zero padding. The ciphertext can therefore carry handshake messages or alerts as well as application bytes. Compatibility ChangeCipherSpec, when emitted, is a separate plaintext record containing 0x01; it is not the TLS 1.3 key-switch instruction.\n\nThe transport has bounded record and byte queues. Bouncy Castle owns handshake reassembly, cryptographic validation and state transitions. Our independent plaintext reassembler exists only to inspect visible initial handshake bytes, never to interpret ciphertext as plaintext.",
+    "internals": "TLSPlaintext has a maximum fragment of 2^14 bytes; TLSCiphertext allows up to 2^14+256 bytes. The lab record framer enforces the latter envelope bound, while the TLS engine enforces content-specific rules. Header lengths are unsigned big-endian values.\n\nReadOutput returns available bytes without promising one record per call. OfferInput accepts byte fragments, but the stepping controller deliberately supplies one complete record each time. Our framer tests split records at every byte boundary, coalesce records and reassemble handshake messages across fragments.\n\nPer-direction record sequence numbers feed nonce construction and are implicit rather than transmitted in the header. AEAD protects the record header as additional data. Do not mistake the laboratory's display sequence IDs for TLS cryptographic sequence numbers.",
+    "purpose": "Preserve byte-stream framing while providing an honest, controllable delivery boundary.",
+    "security": "AEAD authenticates encrypted records; framing alone offers no integrity or identity.",
+    "fields": [
+      "Content type",
+      "Legacy record version",
+      "Payload length",
+      "Exact payload bytes"
+    ],
+    "bindings": [
+      "WireRecord.Bytes",
+      "DeliveryOrder",
+      "Pending queue"
+    ],
+    "concepts": [
+      "AEAD",
+      "TLSInnerPlaintext",
+      "ChangeCipherSpec"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "5",
+        "title": "Record Protocol",
+        "relevance": "Preserve byte-stream framing while providing an honest, controllable delivery boundary."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsProtocol.cs",
+        "member": "OfferInput",
+        "line": 1314,
+        "inspect": "Follow complete-record processing into handshake reassembly."
+      }
+    ],
+    "related": [
+      "application-data",
+      "encrypted-extensions",
+      "alerts"
+    ],
+    "check": {
+      "question": "What does pressing Next guarantee?",
+      "answers": [
+        "Exactly one handshake message is processed",
+        "Exactly one pending record is delivered; several internal messages may be processed"
+      ],
+      "correctIndex": 1,
+      "explanation": "Record boundaries and handshake message boundaries are independent."
+    }
+  },
+  {
+    "id": "alerts",
+    "title": "TLS alerts and failed experiments",
+    "definition": "Alerts communicate protocol errors or closure; the trace displays the actual raised or received description.",
+    "beginner": "When a required check fails, TLS must stop accepting the connection. An alert tells the peer that something went wrong. The certificate diagnostics explain which local expectation was not met.\n\nA failed experiment is useful evidence. Compare what was configured, which certificate arrived, and why the receiver refused it. Reset creates new keys and protocol state so that correcting the configuration can be tested independently.",
+    "engineer": "The laboratory observes NotifyAlertRaised and NotifyAlertReceived separately. A locally raised alert may be queued but not yet delivered because you control the transport. A failure in the receiver does not imply the sender has already learned about it. After a failed run, Next can deliver remaining queued records, including the alert.\n\nThe certificate policy maps an expired leaf to certificate_expired, a missing required client identity to certificate_required, an untrusted root to unknown_ca and other certificate failures to bad_certificate. These descriptions come from the actual exception/callback path. The UI never assigns an alert just because a scenario was expected to fail.\n\nEncrypted alerts remain opaque on the wire. The local callback reveals their meaning from inside the endpoint. A transport exception, a failed certificate check and a peer alert are related observations with different provenance.",
+    "internals": "TLS alert plaintext contains a level and description, each one byte. TLS 1.3 treats error alerts as fatal and defines closure behaviour separately. The record layer can encrypt this two-byte content under the active write cipher; outer type 23 consequently does not reveal that it is an alert.\n\nThrowing TlsFatalAlert in the validation callback propagates through the real protocol processing path, causes an alert to be raised and invalidates the connection. Watch TlsProtocol.OfferInput, the local ValidateCertificate frame and NotifyAlertRaised together. A later alert-received callback requires transport delivery to the opposite engine.\n\nThe lab preserves failed records and validation reports, but prevents further application sends after failure. It does not retry a connection by silently relaxing certificate checks.",
+    "purpose": "Explain real rejection and closure outcomes without inventing peer observations.",
+    "security": "Failed authentication must disable application access; visibility of the error does not make the channel safe.",
+    "fields": [
+      "Alert level",
+      "Alert description",
+      "Raised versus received",
+      "Failed validation decisions"
+    ],
+    "bindings": [
+      "alert events",
+      "Failure",
+      "ValidationReport.Decisions"
+    ],
+    "concepts": [
+      "TLS alert",
+      "Trust anchor"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "6",
+        "title": "Alert Protocol",
+        "relevance": "Explain real rejection and closure outcomes without inventing peer observations."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsProtocol.cs",
+        "member": "RaiseAlertFatal",
+        "line": 1599,
+        "inspect": "Observe the fatal alert path and connection failure."
+      }
+    ],
+    "related": [
+      "path-validation",
+      "identity",
+      "purpose"
+    ],
+    "check": {
+      "question": "Has the peer received an alert as soon as it is raised locally?",
+      "answers": [
+        "Always",
+        "Only after the queued record reaches the peer"
+      ],
+      "correctIndex": 1,
+      "explanation": "The controlled transport separates generation from delivery."
+    }
+  },
+  {
+    "id": "key-schedule",
+    "title": "HKDF: the TLS 1.3 key schedule",
+    "definition": "HKDF derives separate, labelled secrets for handshake and application protection from shared entropy and transcript context.",
+    "beginner": "Both peers arrive at a shared secret, but a secure protocol needs several different keys. It needs keys for each direction, for different phases and for final checks. The key schedule is a recipe that derives each one for its particular job.\n\nThe diagram shows relationships, not live secret values. Reusing one raw secret everywhere would lose the separation that TLS carefully establishes.",
+    "engineer": "TLS 1.3 uses HKDF-Extract to combine secret inputs and HKDF-Expand-Label to derive purpose-specific output. In a full handshake without PSK, the early-secret path begins with the specified zero input. The ECDHE result enters the handshake-secret extraction. Client and server handshake traffic secrets additionally depend on the transcript through ServerHello.\n\nThe master-secret stage derives application traffic secrets using the transcript through the server Finished. Each traffic secret expands to a record key and IV. Separate “c hs traffic”, “s hs traffic”, “c ap traffic” and “s ap traffic” labels prevent accidental key reuse between directions and phases.\n\nFinished uses another labelled key derived from a handshake traffic secret. A label is part of the cryptographic context, not just documentation. This is why a changed transcript changes dependent keys or authentication values, and why merely agreeing on ECDHE is not the complete TLS protocol.",
+    "internals": "HKDF-Expand-Label encodes an HkdfLabel containing the output length, the ASCII prefix “tls13 ” concatenated with the label, and a length-prefixed context. Derive-Secret uses the transcript hash as context. The hash function follows the chosen cipher suite; this lab uses SHA-256.\n\nEstablish13PhaseHandshake and Establish13PhaseApplication orchestrate these transitions in TlsUtilities. They install pending ciphers on the record stream at the correct protocol boundaries. The diagram omits resumption and early-data branches because the application performs fresh certificate handshakes only.\n\nActual secret values and private agreement state are intentionally absent from trace events. Conventional source debugging can inspect sensitive state locally, so avoid sharing debugger dumps or memory snapshots.",
+    "purpose": "Derive independent traffic and authentication keys bound to the negotiated transcript.",
+    "security": "Domain separation, directional keys and phase separation limit unintended key reuse.",
+    "fields": [
+      "Conceptual ECDHE input",
+      "Transcript scope",
+      "HKDF labels",
+      "Handshake versus application phase"
+    ],
+    "bindings": [
+      "ServerHello and Finished observation boundaries"
+    ],
+    "concepts": [
+      "HKDF",
+      "HMAC",
+      "Transcript hash",
+      "Traffic secret"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "7.1",
+        "title": "Key Schedule",
+        "relevance": "Derive independent traffic and authentication keys bound to the negotiated transcript."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsUtilities.cs",
+        "member": "Establish13PhaseHandshake",
+        "line": 1767,
+        "inspect": "Follow secret derivation and pending cipher installation."
+      }
+    ],
+    "related": [
+      "key-share",
+      "finished",
+      "application-data"
+    ],
+    "check": {
+      "question": "Why are client and server traffic secrets different?",
+      "answers": [
+        "They use different purpose labels and directional context",
+        "They use unrelated TLS versions"
+      ],
+      "correctIndex": 0,
+      "explanation": "Both endpoints agree on each direction, but the two directions use distinct secrets and record counters."
+    }
+  },
+  {
+    "id": "path-validation",
+    "title": "Certificate paths and explicit trust anchors",
+    "definition": "Path validation checks issuer signatures and constraints against a root selected by the receiving endpoint.",
+    "beginner": "A receiver needs a reason to trust an identity card. It follows the certificate's issuer to a root it has explicitly chosen to trust. A stranger cannot make a root trusted simply by sending it along with a certificate.\n\nThe client and server have their own trust choices. Changing what the server trusts affects client authentication; it does not automatically change what the client trusts about the server.",
+    "engineer": "The lab uses X509Chain with CustomRootTrust, an explicit CustomTrustStore, an ExtraStore for presented issuers and an ApplicationPolicy for serverAuth or clientAuth. It disables certificate downloads and revocation checks because every teaching identity is local and no CRL or OCSP infrastructure exists.\n\nThe policy also checks the leaf validity, non-CA constraints, DigitalSignature Key Usage and explicit expected EKU. For a server it separately compares the reference hostname with DNS SAN, disabling CN fallback and wildcard matching. X509Chain.Build checks path signatures and constraints as an aggregate operation; the trace labels this honestly instead of inventing a callback for every internal check.\n\nA root match is confirmed against the exact DER of the selected anchor, not just its subject name. The certificate inspector shows a direct leaf-to-root path: the issuing CA is also the root in this lab. Trust-policy experiments add the independent root only by an explicit setting in a fresh session.",
+    "internals": "RFC 5280 path validation starts from a trust anchor provided out of band. The anchor itself is an input to trust, not something made trustworthy by its self-signature. A root's self-signature can establish internal consistency but does not answer whether the application should trust its issuer.\n\nCertificatePolicy.Validate records independently performed policy checks plus the actual X509Chain status flags and chain elements. Failed EKU or lifetime checks remain failed even if a structural root relationship exists. Protocol-level proof-of-possession is subsequently checked by Bouncy Castle, outside X509Chain.\n\nPlatform chain implementations may phrase status diagnostics differently. Tests assert the policy outcome and failed check category, while the UI preserves actual status text. Revocation remains an explicit production gap, not a hidden “passed” step.",
+    "purpose": "Accept only certificates whose path and constraints satisfy the receiving endpoint's chosen policy.",
+    "security": "Trust is local policy. A valid issuer signature is necessary but cannot replace name, purpose, lifetime or possession checks.",
+    "fields": [
+      "Presented issuer",
+      "Selected trust anchors",
+      "Chain status flags",
+      "Validity / KU / EKU",
+      "DNS identity"
+    ],
+    "bindings": [
+      "ValidationReport",
+      "Actual chain subjects"
+    ],
+    "concepts": [
+      "Trust anchor",
+      "Certificate chain",
+      "Revocation"
+    ],
+    "rfcs": [
+      {
+        "number": 5280,
+        "section": "6",
+        "title": "Certification Path Validation",
+        "relevance": "Accept only certificates whose path and constraints satisfy the receiving endpoint's chosen policy."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsClientProtocol.cs",
+        "member": "Receive13ServerCertificate",
+        "line": 1533,
+        "inspect": "Step into the application callback and CertificatePolicy.Validate."
+      }
+    ],
+    "related": [
+      "certificate",
+      "identity",
+      "purpose"
+    ],
+    "check": {
+      "question": "What makes the demonstration root trusted?",
+      "answers": [
+        "It is included in the received chain",
+        "It is explicitly present in this endpoint's CustomTrustStore"
+      ],
+      "correctIndex": 1,
+      "explanation": "Receiving a certificate is not an authority to change local trust policy."
+    }
+  },
+  {
+    "id": "identity",
+    "title": "Server identity: comparing the intended name",
+    "definition": "A valid chain must still identify the server the client intended to contact.",
+    "beginner": "A valid identity card for one person does not identify another. Likewise, a trusted certificate for wrong.example does not identify localhost. The client must compare the name it expected with the names in the certificate.\n\nThis check protects the destination identity even if both certificates were issued by the same trusted CA. Try the hostname-mismatch experiment and inspect the separate DNS identity decision.",
+    "engineer": "The reference identity comes from the client's intended destination, not from whatever name the server presents. The lab fixes it to localhost and sends that name in SNI. CertificatePolicy then uses MatchesHostname with DNS SAN matching, no common-name fallback and no wildcard matching.\n\nChain validation and name matching answer different questions. X509Chain checks an acceptable certification path; DNS identity matching checks that the accepted certificate covers the intended service. Neither proves that the peer holds the private key: CertificateVerify does that next.\n\nClient certificates do not identify a DNS server. The server validates clientAuth purpose and the issuing trust policy, then treats the accepted subject as an authenticated identity. Mapping that identity to application permissions is a separate authorisation decision.",
+    "internals": "RFC 9525 supersedes older service-identity guidance and defines reference and presented identifiers. This laboratory supports only a fixed DNS reference identity, with a deliberately strict SAN-only policy. It does not implement arbitrary destinations, IP-address identity selection or wildcard experiments.\n\nThe hostname check is a .NET policy operation in our callback, not a feature implicitly supplied by merely creating a Bouncy Castle TLS client. Inspect the callback boundary in Receive13ServerCertificate and then CertificatePolicy.Validate. The mismatch scenario presents a validly signed serverAuth leaf with only wrong.example as its DNS SAN, isolating name checking from issuer trust.",
+    "purpose": "Bind a trusted certificate to the actual service the client intended to authenticate.",
+    "security": "A trusted certificate for the wrong service must be rejected.",
+    "fields": [
+      "Reference DNS identity",
+      "Subject Alternative Name",
+      "DNS comparison result"
+    ],
+    "bindings": [
+      "DNS identity validation decision",
+      "Server certificate SAN"
+    ],
+    "concepts": [
+      "SAN",
+      "SNI",
+      "Reference identity"
+    ],
+    "rfcs": [
+      {
+        "number": 9525,
+        "section": "6",
+        "title": "Verifying Service Identity",
+        "relevance": "Bind a trusted certificate to the actual service the client intended to authenticate."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsClientProtocol.cs",
+        "member": "Receive13ServerCertificate",
+        "line": 1533,
+        "inspect": "Follow callback validation into the SAN comparison."
+      }
+    ],
+    "related": [
+      "path-validation",
+      "certificate"
+    ],
+    "check": {
+      "question": "Where should the expected server name come from?",
+      "answers": [
+        "The received certificate subject",
+        "The client's intended service configuration"
+      ],
+      "correctIndex": 1,
+      "explanation": "Allowing the peer to choose the reference identity would make the comparison meaningless."
+    }
+  },
+  {
+    "id": "application-data",
+    "title": "Application data: plaintext → ciphertext → plaintext",
+    "definition": "After authentication, the record layer protects real application bytes with negotiated AEAD keys.",
+    "beginner": "Write a greeting after the handshake completes. The sending endpoint sees your text. The transport queue sees an encrypted record. The receiving endpoint sees the recovered text only after you deliver that record.\n\nThis is actual TLS encryption and decryption. The laboratory does not encode the text and call it encryption. Compare both endpoints and the record bytes to follow the complete journey.",
+    "engineer": "WriteApplicationData passes plaintext into Bouncy Castle's established record layer. It constructs TLSInnerPlaintext, applies the selected AEAD and queues ciphertext. OfferInput at the receiver verifies and decrypts it; ReadInput retrieves the resulting application bytes. The outer content type remains application_data, as it did for encrypted handshake messages.\n\nThe lab caps a message at 4096 UTF-8 bytes and waits for both handshakes and all required identity checks. In server-only mode the demo permits unprivileged channel messaging while clearly showing the unauthenticated client; it does not grant client-specific privileges. Failure scenarios cannot send messages.\n\nTLS is a byte stream, not an application message framing protocol. This short demonstration uses one bounded send at a time and displays received chunks. A real application would need its own message framing and authorisation policy above TLS.",
+    "internals": "AES-128-GCM protects records using per-direction keys and nonces derived from a static write IV and implicit sequence number. The encoded record header is additional authenticated data. A receiver must reject an altered ciphertext or authentication tag instead of releasing unauthenticated plaintext.\n\nTraffic-key derivation and cipher installation occur in the TLS key schedule, not in the Blazor page. The UI records submitted and recovered plaintext because these are intentionally supplied lab messages; private keys and traffic secrets remain unlogged. Wire hex is the exact ReadOutput result.\n\nRecord lengths leak information about traffic sizes and timing even when content is encrypted. TLS confidentiality is not a claim that all metadata disappears. The web-tier HTTP connection is another channel entirely, and remote deployment would require its own access controls and HTTPS.",
+    "purpose": "Demonstrate actual record protection and the authenticated delivery of application bytes.",
+    "security": "AEAD provides confidentiality and integrity; identity-based permissions still belong to the application.",
+    "fields": [
+      "Sender plaintext",
+      "Outer encrypted record",
+      "Receiver plaintext",
+      "Direction and payload length"
+    ],
+    "bindings": [
+      "ApplicationMessage",
+      "application-send / application-receive events"
+    ],
+    "concepts": [
+      "AEAD",
+      "Nonce",
+      "Authorisation"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "5.2",
+        "title": "Record Payload Protection",
+        "relevance": "Demonstrate actual record protection and the authenticated delivery of application bytes."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsProtocol.cs",
+        "member": "WriteApplicationData",
+        "line": 950,
+        "inspect": "Follow plaintext into the record cipher, then inspect ReadInput at the peer."
+      }
+    ],
+    "related": [
+      "records",
+      "authorisation",
+      "key-schedule"
+    ],
+    "check": {
+      "question": "What does a valid TLS record guarantee about application permissions?",
+      "answers": [
+        "Every authenticated peer is an administrator",
+        "Nothing by itself; permissions require an application policy"
+      ],
+      "correctIndex": 1,
+      "explanation": "TLS authenticates the channel according to its configuration, not every action requested over it."
+    }
+  },
+  {
+    "id": "secure-channel",
+    "title": "What a secure channel does—and what it cannot do",
+    "definition": "Confidentiality, integrity and authenticated peer identity are distinct properties that work together.",
+    "beginner": "Encryption hides the meaning of a message. Integrity detects changes. Authentication establishes who is at the other end, according to a trust policy. You need all three for a useful secure conversation with a known service.\n\nTCP gets bytes from one place to another in order, but it does not by itself keep them secret or authenticate a service. TLS sits above that transport. Here a memory queue supplies the transport, allowing you to study TLS without operating-system sockets.",
+    "engineer": "TLS assumes an attacker may read, delay, modify or inject traffic on the underlying transport. Record AEAD prevents undetected content changes and reveals plaintext only after authentication of the record. Certificate-based handshake authentication binds the resulting channel to a peer identity accepted by the local policy.\n\nThese properties do not secure a compromised endpoint, stop an authorised application from disclosing received data or hide all traffic metadata. TLS also does not decide whether an authenticated identity may read a particular document. That belongs to application authorisation.\n\nThe laboratory control page uses local HTTP for simple startup. Its experimental TLS channel is wholly inside the backend. Moving the teaching page onto a remote network changes its threat model and requires separate web-tier HTTPS and access control.",
+    "internals": "At the protocol boundary, OfferInput receives untrusted record bytes and ReadInput exposes only validated application plaintext. The session must not confuse a certificate-callback success with completion of the entire handshake. Our access gate requires both completion callbacks plus the authentication policy.\n\nTCP fragmentation is irrelevant to TLS record semantics: an implementation buffers until a complete record is available, then reassembles the handshake independently. The lab's two framing components and endpoint instrumentation make these layers explicit. Display sequence numbers are diagnostic metadata, not the implicit cryptographic counters used by the record layer.",
+    "purpose": "Distinguish transport delivery from the security properties supplied by TLS.",
+    "security": "No single property—encryption, a valid certificate or reliable delivery—substitutes for the complete security policy.",
+    "fields": [
+      "Transport bytes",
+      "Authenticated plaintext",
+      "Peer identity"
+    ],
+    "bindings": [
+      "WireRecord",
+      "Peer.Authentication"
+    ],
+    "concepts": [
+      "Confidentiality",
+      "Integrity",
+      "Authentication",
+      "TCP"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "1",
+        "title": "Introduction",
+        "relevance": "Distinguish transport delivery from the security properties supplied by TLS."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsProtocol.cs",
+        "member": "ReadInput",
+        "line": 1415,
+        "inspect": "Inspect the boundary where validated application plaintext becomes available."
+      }
+    ],
+    "related": [
+      "overview",
+      "authorisation",
+      "records"
+    ],
+    "check": {
+      "question": "Does TCP alone authenticate a remote service?",
+      "answers": [
+        "Yes",
+        "No; it supplies an ordered byte transport"
+      ],
+      "correctIndex": 1,
+      "explanation": "An ordered connection is not a cryptographically authenticated connection."
+    }
+  },
+  {
+    "id": "mutual-tls",
+    "title": "Mutual TLS: two independent authentication decisions",
+    "definition": "mTLS authenticates the client as well as the server using certificate-based proofs.",
+    "beginner": "In server-authenticated TLS the client checks the server. Mutual TLS adds the reverse check: the server asks for and validates a client certificate and proof. Each side makes its own decision.\n\nThe client might trust the server while the server rejects the client. Watch the two panels during an untrusted-client experiment. Partial success is not a successful mTLS session.",
+    "engineer": "The server sends CertificateRequest when client authentication is required. The client answers with its certificate chain and CertificateVerify, proving possession of the matching private key. The server applies its own custom root trust, purpose and validity checks; the client's successful validation of the server cannot override them.\n\nClient A and Client B have distinct keys and certificates under the same demonstration root. The server accepts both because its current policy trusts that issuer and clientAuth purpose, not because the identities are interchangeable. A real application could assign different permissions to the resulting identities.\n\nThe trust-policy experiment uses a client issued by the independent root. Initially it fails. Explicitly adding that root to the server's trust set accepts an additional authority; it does not bypass signature, lifetime or purpose validation.",
+    "internals": "Two certificate-validation callback paths exist: TlsAuthentication.NotifyServerCertificate on the client and TlsServer.NotifyClientCertificate on the server. Both feed the same policy component with different purpose and identity requirements. Protocol-level signature and Finished verification remain in Bouncy Castle.\n\nThe server requires a non-empty certificate chain in mTLS mode and throws certificate_required otherwise. The UI distinguishes “certificate accepted; awaiting proof and Finished” from “peer authenticated”. This prevents transient state during the synchronous handler from appearing as a completed mutual identity decision.",
+    "purpose": "Authenticate both directions according to independent receiver policies.",
+    "security": "Server authentication does not imply client authentication or grant application permissions.",
+    "fields": [
+      "Client certificate requirement",
+      "Independent roots",
+      "Two validation reports",
+      "Two completion callbacks"
+    ],
+    "bindings": [
+      "Options.RequireClientCertificate",
+      "Client.Authentication",
+      "Server.Authentication"
+    ],
+    "concepts": [
+      "Mutual authentication",
+      "Trust anchor",
+      "Authorisation"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.4",
+        "title": "Authentication Messages",
+        "relevance": "Authenticate both directions according to independent receiver policies."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsServerProtocol.cs",
+        "member": "Receive13ClientCertificate",
+        "line": 1318,
+        "inspect": "Follow the client chain into server validation."
+      }
+    ],
+    "related": [
+      "certificate-request",
+      "path-validation",
+      "authorisation"
+    ],
+    "check": {
+      "question": "Can the client accept the server while the server rejects the client?",
+      "answers": [
+        "Yes; the trust decisions are independent",
+        "No; trust is automatically symmetric"
+      ],
+      "correctIndex": 0,
+      "explanation": "Each receiver applies its own trust anchors, purpose and identity policy."
+    }
+  },
+  {
+    "id": "purpose",
+    "title": "Key Usage and Extended Key Usage",
+    "definition": "A trusted certificate must also permit the operation and endpoint role for which it is used.",
+    "beginner": "An identity card may be valid but unsuitable for a particular job. Certificates can restrict what their keys may do. A certificate intended only for server authentication should not be treated as a client identity.\n\nRun the incorrect-purpose experiment. The certificate is correctly signed and in date, yet the server rejects it because it does not permit client authentication.",
+    "engineer": "Key Usage (KU) describes cryptographic operations such as digitalSignature or keyCertSign. Extended Key Usage (EKU) describes application purposes, including serverAuth and clientAuth. Basic Constraints identifies CA certificates and can constrain path length.\n\nThis lab requires an explicit non-CA leaf with DigitalSignature KU and explicit role-specific EKU. The root uses CA Basic Constraints and keyCertSign/crlSign KU. TLS 1.3 certificate authentication signs the handshake; the endpoint key is not used for the old RSA key-transport operation.\n\nX509Chain.ApplicationPolicy checks the intended EKU as part of path validation. We also expose an explicit EKU decision so the failure is understandable. Requiring an explicit EKU is a deliberate laboratory policy stricter than treating an absent EKU as unrestricted in some general-purpose validators.",
+    "internals": "The expected OIDs are 1.3.6.1.5.5.7.3.1 for serverAuth and 1.3.6.1.5.5.7.3.2 for clientAuth. KU is a bit string; EKU is a sequence of purpose OIDs. Critical extensions require the validator to understand and enforce them.\n\nThe wrong-purpose leaf carries serverAuth only but is selected as a client credential. Its ECDSA key can mathematically create CertificateVerify, yet the policy rejects the identity before that proof can establish an authorised client role. Cryptographic capability and permitted use are different questions.",
+    "purpose": "Enforce the permitted use of a key and certificate independently of issuer trust.",
+    "security": "An acceptable issuer and signature do not erase certificate constraints.",
+    "fields": [
+      "Key Usage",
+      "Extended Key Usage OIDs",
+      "Basic Constraints"
+    ],
+    "bindings": [
+      "Certificate inspector",
+      "Extended Key Usage validation decision"
+    ],
+    "concepts": [
+      "Key Usage",
+      "Extended Key Usage",
+      "Basic Constraints"
+    ],
+    "rfcs": [
+      {
+        "number": 5280,
+        "section": "4.2.1.12",
+        "title": "Extended Key Usage",
+        "relevance": "Enforce the permitted use of a key and certificate independently of issuer trust."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsServerProtocol.cs",
+        "member": "Receive13ClientCertificate",
+        "line": 1318,
+        "inspect": "Step into CertificatePolicy and compare requested purpose to the actual EKU."
+      }
+    ],
+    "related": [
+      "certificate",
+      "path-validation"
+    ],
+    "check": {
+      "question": "Can a trusted, in-date serverAuth-only certificate satisfy this lab's client policy?",
+      "answers": [
+        "Yes, any trusted certificate works",
+        "No, clientAuth must be explicitly allowed"
+      ],
+      "correctIndex": 1,
+      "explanation": "Certificate purpose is checked independently of issuer and lifetime."
+    }
+  },
+  {
+    "id": "signatures",
+    "title": "Public keys, private keys and digital signatures",
+    "definition": "A signature authenticates data under a public key; it does not encrypt that data.",
+    "beginner": "A private key is kept by its owner. A public key can be shared. Signing with the private key creates a proof that others can check using the public key. Knowing the public key does not let them make new signatures.\n\nCertificates and CertificateVerify use signatures for different data. A CA signs the certificate. The endpoint signs the handshake. Neither signature is a secret message encryption mechanism.",
+    "engineer": "Symmetric cryptography uses shared secret keys and is efficient for bulk record protection. Asymmetric cryptography gives distinct public and private roles and supports signatures or key agreement, depending on the algorithm. Do not assume every key type supports encryption, signing and agreement interchangeably.\n\nThis laboratory uses ECDSA P-256 for certificate and handshake signatures, ECDHE P-256 for fresh agreement and AES-GCM for symmetric record protection. Despite both using P-256, the ECDSA certificate key and ECDHE ephemeral key have different lifetimes and purposes and are generated independently.\n\nVerification establishes that a signature matches data and a public key. Trust still requires deciding whether that public key belongs to an acceptable identity. A correct signature under an attacker's own key does not authenticate your intended server.",
+    "internals": "The certificate signature covers the DER-encoded TBSCertificate. TLS 1.3 CertificateVerify covers a contextualised transcript hash. BcDefaultTlsCredentialedSigner selects the signer appropriate to the key and SignatureScheme; the TLS utilities construct the protocol-specific input.\n\nPrivate material is converted between .NET and Bouncy Castle in memory to use generated credentials. No private-key PEM, PKCS#8 export or key log is written. The certificate inspector shows only public key parameters and public bytes. Conventional debugger memory inspection can reveal secrets and should be treated accordingly.",
+    "purpose": "Explain why identity signatures, ephemeral agreement and record encryption use distinct keys and operations.",
+    "security": "Never interpret a public certificate as proof of private-key possession or a signature as encryption.",
+    "fields": [
+      "Public algorithm and parameters",
+      "Signature algorithm",
+      "CertificateVerify signature"
+    ],
+    "bindings": [
+      "CertificateView",
+      "CertificateVerify decoded fields"
+    ],
+    "concepts": [
+      "Public key",
+      "Private key",
+      "Digital signature",
+      "Symmetric encryption"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "4.4.3",
+        "title": "Certificate Verify",
+        "relevance": "Explain why identity signatures, ephemeral agreement and record encryption use distinct keys and operations."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/crypto/impl/bc/BcDefaultTlsCredentialedSigner.cs",
+        "member": "MakeSigner",
+        "line": 12,
+        "inspect": "Inspect how the private key and signature scheme choose the managed signer."
+      }
+    ],
+    "related": [
+      "certificate-verify",
+      "key-share",
+      "application-data"
+    ],
+    "check": {
+      "question": "Does signing a message make its contents confidential?",
+      "answers": [
+        "Yes",
+        "No; a signature provides verifiable authenticity and integrity"
+      ],
+      "correctIndex": 1,
+      "explanation": "Confidentiality requires an encryption mechanism such as the record-layer AEAD."
+    }
+  },
+  {
+    "id": "forward-secrecy",
+    "title": "Forward secrecy and ephemeral lifetimes",
+    "definition": "Fresh ephemeral agreement limits what a later compromise of a certificate key reveals about recorded sessions.",
+    "beginner": "Suppose someone records today's encrypted conversation and steals the server's certificate private key next month. With properly erased ephemeral session keys, that stolen signing key alone should not unlock the old conversation.\n\nThis is why TLS uses temporary agreement keys as well as the certificate signing key. Resetting the lab creates fresh material instead of reusing a previous session's secrets.",
+    "engineer": "In this full TLS 1.3 handshake the long-term certificate key signs an ephemeral negotiation; it does not encrypt a transported session secret. The shared secret comes from fresh ECDHE contributions. A later compromise of the signing key can enable future impersonation until the credential is replaced, but does not by itself reconstruct past ECDHE secrets from captured public points.\n\nForward secrecy depends on destroying ephemeral secrets and protecting endpoints while the session is live. A debugger, key log, process dump or compromised runtime can expose traffic secrets directly. TLS cannot protect data after an endpoint intentionally discloses it.\n\nResumption and 0-RTT have additional security properties and replay considerations. The laboratory deliberately uses new certificate handshakes and does not claim to demonstrate these branches.",
+    "internals": "The P-256 public shares in ClientHello and ServerHello are independent of the certificate key pair. Key schedule extraction consumes the ECDHE result, then expands directional secrets. The certificate signature binds this exchange into the authenticated transcript.\n\nBouncy Castle manages TLS secret objects and protocol cleanup. The application closes session protocols and disposes .NET certificate handles on reset/disposal. Managed runtimes do not provide an absolute guarantee that every historical copy is erased immediately, so this remains a teaching process rather than a hardened key-management boundary.",
+    "purpose": "Connect ephemeral agreement to the consequences of later credential compromise.",
+    "security": "Forward secrecy does not protect against live endpoint compromise or retained traffic secrets.",
+    "fields": [
+      "Fresh public key shares",
+      "Session reset",
+      "Certificate signing key role"
+    ],
+    "bindings": [
+      "Different ClientHello shares across sessions"
+    ],
+    "concepts": [
+      "Forward secrecy",
+      "ECDHE",
+      "Traffic secret"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "E.1",
+        "title": "Handshake Security",
+        "relevance": "Connect ephemeral agreement to the consequences of later credential compromise."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsProtocol.cs",
+        "member": "CleanupHandshake",
+        "line": 385,
+        "inspect": "Inspect which handshake state is discarded after completion."
+      }
+    ],
+    "related": [
+      "key-share",
+      "key-schedule",
+      "signatures"
+    ],
+    "check": {
+      "question": "Does a later stolen certificate signing key alone decrypt old ECDHE sessions?",
+      "answers": [
+        "Not if the ephemeral session secrets were securely discarded",
+        "Always"
+      ],
+      "correctIndex": 0,
+      "explanation": "The recorded public shares and signing key do not reveal the past ephemeral private scalars."
+    }
+  },
+  {
+    "id": "authorisation",
+    "title": "Authentication is not authorisation",
+    "definition": "An authenticated peer identity is input to an application permission decision, not the decision itself.",
+    "beginner": "Authentication asks who the peer is. Authorisation asks what that peer may do. Showing a valid staff identity card does not necessarily grant access to every room.\n\nThe laboratory uses harmless greeting messages to demonstrate the channel. It does not implement users, roles, privileged resources or a production access-control system.",
+    "engineer": "A successful mTLS handshake establishes a peer identity according to the configured certificate trust policy. Applications still need to map that identity to permissions, consider certificate renewal and revocation, and decide which operations are allowed. Trusting a whole CA can accept many distinct identities; that is not the same as granting all of them administrator access.\n\nClient A and Client B demonstrate distinct identities under one issuer. Server-only mode establishes no client certificate identity at all. Its unprivileged message exchange is labelled accordingly and must not be interpreted as access to an authenticated-client service.\n\nThe lab disables messaging on any failed handshake and waits for the configured requirements to complete. That gate protects the demonstration semantics; it is not a general authorisation engine.",
+    "internals": "TlsSession.CanMessage checks both completion state and the relevant certificate-validation flags. Bouncy Castle completion supplies evidence that proof-of-possession and Finished processing also succeeded. The policy checks occur before application bytes are accepted by the lab's send operation.\n\nFor a real application, bind authorisation to a stable, deliberately chosen identity representation instead of unvalidated display text. A subject distinguished name alone can be ambiguous across issuers. Avoid treating a certificate fingerprint as permanent identity without considering renewal, or treating the presence of any TLS client certificate as sufficient privilege.",
+    "purpose": "Prevent the mistaken inference that a cryptographically authenticated channel grants application permissions.",
+    "security": "Least privilege and explicit permission checks remain necessary above TLS.",
+    "fields": [
+      "Authenticated identity",
+      "Configured client requirement",
+      "Application access gate"
+    ],
+    "bindings": [
+      "Peer.Authentication",
+      "CanMessage"
+    ],
+    "concepts": [
+      "Authentication",
+      "Authorisation",
+      "Trust anchor"
+    ],
+    "rfcs": [
+      {
+        "number": 8446,
+        "section": "1",
+        "title": "Introduction",
+        "relevance": "Prevent the mistaken inference that a cryptographically authenticated channel grants application permissions."
+      }
+    ],
+    "sources": [
+      {
+        "file": "tls/TlsProtocol.cs",
+        "member": "CompleteHandshake",
+        "line": 412,
+        "inspect": "Observe the hand-off from established TLS to application policy."
+      }
+    ],
+    "related": [
+      "mutual-tls",
+      "application-data"
+    ],
+    "check": {
+      "question": "What may Client B do just because its certificate is accepted?",
+      "answers": [
+        "Anything Client A can do",
+        "Only what a separate application policy permits"
+      ],
+      "correctIndex": 1,
+      "explanation": "A shared issuer establishes trust in credentials, not equality of application permissions."
+    }
+  }
+]

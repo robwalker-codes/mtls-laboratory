@@ -1,0 +1,45 @@
+<section class="certificate-inspector">
+    <div class="section-heading"><div><div class="eyebrow">X.509 / session identities</div><h2>Certificates &amp; trust</h2></div><InfoPopover Topic="certificate" Label="X.509" OnTopic="OnTopic" /></div>
+    @if (Session is null)
+    { <p class="muted">Start an experiment to inspect its freshly generated certificates and validation results.</p> }
+    else
+    {
+        var client = Session.Pki.SelectClient(Session.Options);
+        var server = Session.Pki.SelectServer(Session.Options);
+        <div class="certificate-selector">
+            <button class="@(which == "server" ? "active" : "")" @onclick='() => which = "server"'>Server leaf</button>
+            @if (client is not null) { <button class="@(which == "client" ? "active" : "")" @onclick='() => which = "client"'>Client leaf</button> }
+            <button class="@(which == "root" ? "active" : "")" @onclick='() => which = "root"'>Demonstration root</button>
+            <button class="@(which == "independent" ? "active" : "")" @onclick='() => which = "independent"'>Independent root</button>
+        </div>
+        var cert = which switch { "client" => client ?? server, "root" => Session.Pki.Root, "independent" => Session.Pki.IndependentRoot, _ => server };
+        var view = CertificateView.From(cert);
+        <div class="chain-view">
+            <div><span class="eyebrow">Selected certificate</span><strong>@view.Subject</strong></div><span>→</span>
+            <div><span class="eyebrow">Issuing CA / root</span><strong>@Session.Pki.Issuer(cert).Subject</strong></div>
+        </div>
+        <p class="muted small">This PKI uses direct root issuance, so the issuing CA and root are the same certificate. A root is trusted only if it appears in the receiving peer's explicit trust set. Selecting a certificate does not change trust.</p>
+        <div class="certificate-fields">
+            @foreach (var field in view.Fields)
+            {
+                <div><dt>@field.Name <InfoPopover Label="@field.Name" Topic="@field.Topic" OnTopic="OnTopic" /></dt><dd><code>@field.Value</code></dd></div>
+            }
+        </div>
+        <h3>Observed validation decisions</h3>
+        @if (Session.Validations.Count == 0) { <p>Deliver the certificate records to trigger the receiving endpoint's validation callback.</p> }
+        @foreach (var report in Session.Validations)
+        {
+            <div class="validation-report">
+                <h4>@report.Validator validated @report.Subject <span class="badge @(report.Accepted ? "success" : "failure")">@(report.Accepted ? "Certificate accepted" : "Rejected")</span></h4>
+                <p class="small">Certificate-policy callback. Signature proof and Finished are separate TLS checks.</p>
+                @foreach (var decision in report.Decisions)
+                { <div class="decision"><span class="@(decision.Passed ? "pass-text" : "fail-text")">@(decision.Passed ? "✓" : "×")</span><div><strong>@decision.Check</strong><p>@decision.Detail</p></div></div> }
+            </div>
+        }
+    }
+</section>
+@code {
+    [Parameter] public TlsSession? Session { get; set; }
+    [Parameter] public EventCallback<string> OnTopic { get; set; }
+    private string which = "server";
+}

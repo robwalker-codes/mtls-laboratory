@@ -1,0 +1,2 @@
+<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="../MtlsLab.Core/MtlsLab.Core.csproj" /><ProjectReference Include="../MtlsLab.Certificates/MtlsLab.Certificates.csproj" /><PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" Condition="'$(BouncyCastleSource)' == ''" />
+<ProjectReference Include="$(BouncyCastleSource)/crypto/src/BouncyCastle.Crypto.csproj" Condition="'$(BouncyCastleSource)' != ''" /></ItemGroup></Project>

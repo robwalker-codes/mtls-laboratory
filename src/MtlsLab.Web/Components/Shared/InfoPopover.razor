@@ -1,0 +1,18 @@
+@inject ContentCatalogue Content
+<details class="info">
+    <summary aria-label="Learn about @Label" title="Learn about @Label">i</summary>
+    <div class="popover">
+        <strong>@Label</strong>
+        <p>@(Entry?.Definition ?? Lesson.Definition)</p>
+        <p>@(Entry?.Significance ?? Lesson.Purpose)</p>
+        <small>In this laboratory: @Lesson.Security</small>
+        <button class="text-button" @onclick="() => OnTopic.InvokeAsync(Topic)">Read the @Lesson.Title lesson →</button>
+    </div>
+</details>
+@code {
+    [Parameter] public string Topic { get; set; } = "overview";
+    [Parameter] public string Label { get; set; } = "TLS";
+    [Parameter] public EventCallback<string> OnTopic { get; set; }
+    private Lesson Lesson => Content.Get(Topic);
+    private GlossaryEntry? Entry => Content.Glossary.FirstOrDefault(x => x.Term.Equals(Label, StringComparison.OrdinalIgnoreCase));
+}

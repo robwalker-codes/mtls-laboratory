@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><ProjectReference Include="../MtlsLab.Core/MtlsLab.Core.csproj" /><ProjectReference Include="../MtlsLab.Tls/MtlsLab.Tls.csproj" /><ProjectReference Include="../MtlsLab.Certificates/MtlsLab.Certificates.csproj" /><ProjectReference Include="../MtlsLab.Education/MtlsLab.Education.csproj" /></ItemGroup></Project>

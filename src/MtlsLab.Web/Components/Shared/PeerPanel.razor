@@ -1,0 +1,39 @@
+<aside class="peer-panel @(Active ? "peer-active" : "")">
+    <div class="eyebrow">@(Side == PeerSide.Client ? "01 / Initiator" : "02 / Responder")</div>
+    <h2><span class="peer-glyph">@(Side == PeerSide.Client ? "C" : "S")</span> TLS @Side</h2>
+    @if (Session is null)
+    {
+        <p class="muted">Waiting for an experiment.</p>
+        <div class="identity-card"><span class="status-dot"></span> Independent managed TLS peer</div>
+        <p>Credentials and trust anchors are generated in memory when you start.</p>
+    }
+    else
+    {
+        var peer = Side == PeerSide.Client ? Session.Client : Session.Server;
+        var cert = Side == PeerSide.Client ? Session.Pki.SelectClient(Session.Options) : Session.Pki.SelectServer(Session.Options);
+        var roots = Side == PeerSide.Client ? Session.Pki.ClientTrust(Session.Options) : Session.Pki.ServerTrust(Session.Options);
+        <div class="identity-card"><span class="status-dot @(peer.HandshakeComplete ? "live" : "")"></span> @(cert?.GetNameInfo(X509NameType.SimpleName, false) ?? "No certificate configured")</div>
+        <dl class="peer-facts">
+            <dt>Protocol state</dt><dd>@(peer.HandshakeComplete ? "Handshake complete" : peer.State)</dd>
+            <dt>Peer authentication <InfoPopover Label="Authentication" Topic="mutual-tls" OnTopic="OnTopic" /></dt><dd>@peer.Authentication</dd>
+            <dt>Protocol version</dt><dd>@peer.Version</dd>
+            <dt>Cipher suite <InfoPopover Label="Cipher suite" Topic="client-hello" OnTopic="OnTopic" /></dt><dd class="mono small">@peer.Cipher</dd>
+            @if (Side == PeerSide.Server)
+            { <dt>Client certificate</dt><dd>@(Session.Options.RequireClientCertificate ? "Required" : "Not requested — server-only TLS")</dd> }
+            <dt>Explicit trust anchors <InfoPopover Label="Trust anchor" Topic="path-validation" OnTopic="OnTopic" /></dt>
+            <dd>@foreach (var root in roots) { <span class="anchor-name">@root.GetNameInfo(X509NameType.SimpleName, false)</span> }</dd>
+        </dl>
+        <div class="peer-counters"><div><strong>@Session.Records.Count(x => x.Sender == Side && x.Status == RecordStatus.Pending)</strong><span>outbound queued</span></div><div><strong>@Session.Records.Count(x => x.Receiver == Side && x.DeliveryOrder is not null)</strong><span>records received</span></div></div>
+        <h3>Recent observations</h3>
+        <ul class="peer-events">
+            @foreach (var e in Session.Events.Where(x => x.Peer == Side && x.Kind != "record").TakeLast(4).Reverse())
+            { <li><span class="mono">@e.Sequence.ToString("D3")</span><span>@e.Title<small>@e.Provenance · @e.Outcome</small></span></li> }
+        </ul>
+    }
+</aside>
+@code {
+    [Parameter] public TlsSession? Session { get; set; }
+    [Parameter] public PeerSide Side { get; set; }
+    [Parameter] public bool Active { get; set; }
+    [Parameter] public EventCallback<string> OnTopic { get; set; }
+}

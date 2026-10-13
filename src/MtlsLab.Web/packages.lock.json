@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Microsoft.AspNetCore.App.Internal.Assets": {
+        "type": "Direct",
+        "requested": "[10.0.12, )",
+        "resolved": "10.0.12",
+        "contentHash": "+sIBo9AMBZH46qHWHQdfzcGMt+RuBaPYrUMOAM9VjA7MQ9QtIez3lq1C3E05+Yroa94KKt3DSWaxmCI4H28a9Q=="
+      },
+      "BouncyCastle.Cryptography": {
+        "type": "Transitive",
+        "resolved": "2.7.0",
+        "contentHash": "U+12df8UEWHgBi04YVf/Lgi2dy3SItlIYvHjjEVa/BngCQIzDCDRBk50DDByCfDvSbe5pRNFr3b7UrVK2kMcLw=="
+      },
+      "mtlslab.certificates": {
+        "type": "Project",
+        "dependencies": {
+          "MtlsLab.Core": "[1.0.0, )"
+        }
+      },
+      "mtlslab.core": {
+        "type": "Project"
+      },
+      "mtlslab.education": {
+        "type": "Project",
+        "dependencies": {
+          "MtlsLab.Core": "[1.0.0, )"
+        }
+      },
+      "mtlslab.tls": {
+        "type": "Project",
+        "dependencies": {
+          "BouncyCastle.Cryptography": "[2.7.0, )",
+          "MtlsLab.Certificates": "[1.0.0, )",
+          "MtlsLab.Core": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}
